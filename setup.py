@@ -7,6 +7,8 @@ setup(
     install_requires=[
         "spotipy",
         "deezer-python",
+        "python-dotenv",
+        "setuptools",
     ],
     entry_points={"console_scripts": ["$PROJECT_NAME=SyncZik.main:main"]},
 )

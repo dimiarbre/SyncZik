@@ -1,3 +1,4 @@
 setuptools
 spotipy
 deezer-python
+python-dotenv
