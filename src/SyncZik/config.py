@@ -1,10 +1,6 @@
 import os
-from typing import Literal
 
 from dotenv import load_dotenv
-
-# Define common types.
-ServiceName = Literal["spotify", "deezer"]
 
 load_dotenv()
 
