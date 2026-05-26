@@ -61,19 +61,19 @@ A browser window opens for Spotify login on first run. The TUI launches after au
 ## TUI usage
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  SyncZik                                                        │
-├──────────────────────────┬──────────────────────────────────────┤
-│ Playlists                │ Songs                                │
-│                          │                                      │
-│  My Playlists            │  Title              Artist  Status   │
-│  ├── KEMIST (source)     │  Track 1            Artist A         │
-│  │   └── My Clone        │  Track 2            Artist B  [local]│
-│  └── Another playlist    │  Track 3            Artist C         │
-│                          │                                      │
-├──────────────────────────┴──────────────────────────────────────┤
-│  [Load [L]]  [Clone [C]]  [Sync [S]]  [Add song [A]]  [Remove [D]] │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  SyncZik                                                         │
+├──────────────────────────┬───────────────────────────────────────┤
+│ Playlists                │ Songs                                 │
+│                          │                                       │
+│  My Playlists            │  Title              Artist  Status    │
+│  ├── Playlist A (source) │  Track 1            Artist A          │
+│  │   └── My Clone        │  Track 2            Artist B  [local] │
+│  └── Another playlist    │  Track 3            Artist C          │
+│                          │                                       │
+├──────────────────────────┴───────────────────────────────────────┤
+│[Load [L]]  [Clone [C]]  [Sync [S]]  [Add song [A]]  [Remove [D]] │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Actions
