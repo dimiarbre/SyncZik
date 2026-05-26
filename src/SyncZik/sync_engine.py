@@ -21,7 +21,6 @@ class MergeResult:
     removed_from_remote_pending: list[Song] = field(default_factory=list)
     pushed_to_remote: list[Song] = field(default_factory=list)
     removed_from_remote: list[Song] = field(default_factory=list)
-    conflicts: list[tuple[Song, str]] = field(default_factory=list)
 
     def is_clean(self) -> bool:
         return not (
@@ -29,7 +28,6 @@ class MergeResult:
             or self.removed_from_remote_pending
             or self.pushed_to_remote
             or self.removed_from_remote
-            or self.conflicts
         )
 
 
@@ -102,45 +100,29 @@ def sync(provider: ServiceProvider, playlist: Playlist) -> MergeResult:
     local_added_ids = local_ids - baseline_ids
     local_removed_ids = baseline_ids - local_ids
 
-    # --- Conflicts ---
-    # Added locally but removed on remote
-    for sid in local_added_ids & remote_removed_ids:
-        result.conflicts.append((
-            _songs_by_id(local_songs)[sid],
-            "added locally but removed on the remote",
-        ))
-    # Added on remote but removed locally
-    for sid in remote_added_ids & local_removed_ids:
-        result.conflicts.append((
-            remote_by_id[sid],
-            "added on remote but removed locally",
-        ))
-
-    conflict_ids = {s.id for s, _ in result.conflicts}
-
-    # --- Non-conflicting remote additions → pull into local ---
-    for sid in remote_added_ids - local_removed_ids - conflict_ids:
+    # --- Remote additions → pull into local ---
+    for sid in remote_added_ids - local_removed_ids:
         song = remote_by_id[sid]
         playlist.add_song(song)
         result.added_from_remote.append(song)
 
-    # --- Non-conflicting remote removals → prompt user (returned as pending) ---
-    for sid in remote_removed_ids - local_removed_ids - local_added_ids - conflict_ids:
+    # --- Remote removals not also removed locally → prompt user ---
+    for sid in remote_removed_ids - local_removed_ids:
         result.removed_from_remote_pending.append(baseline_by_id[sid])
 
     # --- Local additions → push to remote ---
     to_push = [
         _songs_by_id(local_songs)[sid]
-        for sid in local_added_ids - remote_added_ids - conflict_ids
+        for sid in local_added_ids - remote_added_ids
     ]
     if to_push:
         provider.add_songs(playlist.service_id, to_push)
         result.pushed_to_remote.extend(to_push)
 
-    # --- Local removals → push to remote ---
+    # --- Local removals → remove from remote ---
     to_remove_remote = [
         baseline_by_id[sid]
-        for sid in local_removed_ids - remote_removed_ids - conflict_ids
+        for sid in local_removed_ids - remote_removed_ids
         if sid in baseline_by_id
     ]
     if to_remove_remote:
