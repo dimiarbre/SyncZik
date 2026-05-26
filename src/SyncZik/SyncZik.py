@@ -1,4 +1,4 @@
-from tui import run
+from .tui import run
 
 
 def main() -> None:

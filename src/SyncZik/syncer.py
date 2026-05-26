@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from utils import ServiceName
+from .utils import ServiceName
 
 
 class Artist:

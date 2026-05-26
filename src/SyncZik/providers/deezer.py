@@ -1,6 +1,6 @@
-from providers.base import ServiceProvider
-from syncer import Playlist, Song
-from utils import ServiceName
+from .base import ServiceProvider
+from ..syncer import Playlist, Song
+from ..utils import ServiceName
 
 
 class DeezerProvider(ServiceProvider):

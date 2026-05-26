@@ -3,15 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from providers.base import ServiceProvider
-from snapshot_handler import (
+from .providers.base import ServiceProvider
+from .snapshot_handler import (
     list_playlists,
     load_snapshot,
     load_playlist_state,
     save_playlist_state,
     save_snapshot,
 )
-from syncer import Playlist, Song
+from .syncer import Playlist, Song
 
 
 @dataclass

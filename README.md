@@ -58,6 +58,42 @@ syncZik
 
 A browser window opens for Spotify login on first run. The TUI launches after authentication.
 
+## TUI usage
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  SyncZik                                                        │
+├──────────────────────────┬──────────────────────────────────────┤
+│ Playlists                │ Songs                                │
+│                          │                                      │
+│  My Playlists            │  Title              Artist  Status   │
+│  ├── KEMIST (source)     │  Track 1            Artist A         │
+│  │   └── My Clone        │  Track 2            Artist B  [local]│
+│  └── Another playlist    │  Track 3            Artist C         │
+│                          │                                      │
+├──────────────────────────┴──────────────────────────────────────┤
+│  [Load [L]]  [Clone [C]]  [Sync [S]]  [Add song [A]]  [Remove [D]] │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Actions
+
+| Key / Button | Action |
+|---|---|
+| `L` | **Load** — paste a Spotify playlist URL or ID to import it locally |
+| `C` | **Clone** — fork the selected playlist; creates a new Spotify playlist and starts tracking it |
+| `S` | **Sync** — bidirectional merge: pushes local changes to Spotify, pulls remote changes down |
+| `A` | **Add song** — search Spotify and stage a song (appears as `[local]` until next Sync) |
+| `D` | **Remove** — stage the selected song for removal (applied on next Sync) |
+| `Q` | Quit |
+
+### Typical workflow
+
+1. Press `L`, paste a Spotify playlist URL → the playlist and its songs appear.
+2. Press `C`, enter a name → SyncZik creates a copy on Spotify and tracks it locally.
+3. Select the clone, press `A` to add songs or `D` to remove them — changes are **staged** locally (shown with `[local]`).
+4. Press `S` to sync: staged additions/removals are pushed to Spotify, and any changes made directly on Spotify are pulled down. If songs were removed on Spotify while you still have them locally, a dialog lets you decide what to keep.
+
 ## Architecture
 
 ```

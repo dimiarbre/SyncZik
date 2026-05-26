@@ -1,15 +1,11 @@
-import sys
-import os
 import json
 import tempfile
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "SyncZik"))
-
 import pytest
-from syncer import Artist, Song, Playlist
-from sync_engine import (
+from SyncZik.syncer import Artist, Song, Playlist
+from SyncZik.sync_engine import (
     MergeResult,
     add_song,
     apply_remote_removal,
@@ -17,8 +13,8 @@ from sync_engine import (
     remove_song,
     sync,
 )
-from providers.base import ServiceProvider
-from utils import ServiceName
+from SyncZik.providers.base import ServiceProvider
+from SyncZik.utils import ServiceName
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +90,7 @@ class TestClone:
 
 class TestSync:
     def _setup(self, baseline: list[Song], local: list[Song], remote: list[Song]):
-        """Save baseline snapshot and return a playlist with local songs."""
-        import snapshot_handler as sh
+        import SyncZik.snapshot_handler as sh
         playlist = make_playlist(local)
         sh.save_snapshot("spotify", playlist.service_id, baseline)
         sh.save_playlist_state(playlist)
@@ -149,7 +144,7 @@ class TestSync:
         # → c should be removed from remote (local wins), d pulled into local
         a, b, c, d = (make_song(x, x) for x in "abcd")
         playlist = make_playlist([a, b])  # c was removed locally
-        import snapshot_handler as sh
+        import SyncZik.snapshot_handler as sh
         sh.save_snapshot("spotify", playlist.service_id, [a, b, c])
         sh.save_playlist_state(playlist)
         provider = make_provider([a, b, c, d])
@@ -164,7 +159,7 @@ class TestSync:
         # → b not in pending (already gone locally), no remove call needed
         a, b = make_song("A", "a"), make_song("B", "b")
         playlist = make_playlist([a])  # b removed locally
-        import snapshot_handler as sh
+        import SyncZik.snapshot_handler as sh
         sh.save_snapshot("spotify", playlist.service_id, [a, b])
         sh.save_playlist_state(playlist)
         provider = make_provider([a])  # b also removed remotely

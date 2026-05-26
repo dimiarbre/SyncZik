@@ -1,5 +1,5 @@
-from providers.base import ServiceProvider
-from providers.deezer import DeezerProvider
-from providers.spotify import SpotifyProvider
+from .base import ServiceProvider
+from .deezer import DeezerProvider
+from .spotify import SpotifyProvider
 
 __all__ = ["ServiceProvider", "SpotifyProvider", "DeezerProvider"]

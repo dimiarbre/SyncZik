@@ -1,8 +1,8 @@
 import spotipy
 
-from providers.base import ServiceProvider
-from syncer import Artist, Playlist, Song
-from utils import ServiceName
+from .base import ServiceProvider
+from ..syncer import Artist, Playlist, Song
+from ..utils import ServiceName
 
 _BATCH_SIZE = 100
 

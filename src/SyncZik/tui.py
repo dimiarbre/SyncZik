@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(__file__))
-
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -23,11 +18,11 @@ from textual.widgets import (
 )
 from textual.widgets.tree import TreeNode
 
-from auth import get_spotify_client
-from config import SPOTIFY_USER_ID
-from providers.spotify import SpotifyProvider
-from snapshot_handler import list_playlists, save_playlist_state
-from sync_engine import (
+from .auth import get_spotify_client
+from .config import SPOTIFY_USER_ID
+from .providers.spotify import SpotifyProvider
+from .snapshot_handler import list_playlists, save_playlist_state
+from .sync_engine import (
     MergeResult,
     add_song,
     apply_remote_removal,
@@ -35,7 +30,7 @@ from sync_engine import (
     remove_song,
     sync,
 )
-from syncer import Playlist, Song
+from .syncer import Playlist, Song
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +160,10 @@ class SyncResultModal(ModalScreen[list[Song]]):
 # ---------------------------------------------------------------------------
 
 SYNCZIG_CSS = """
+ModalScreen {
+    align: center middle;
+}
+
 #layout {
     layout: horizontal;
 }
@@ -212,7 +211,6 @@ SYNCZIG_CSS = """
     padding: 1 2;
     width: 60;
     height: auto;
-    margin: auto;
 }
 
 #dialog-title {
@@ -328,7 +326,7 @@ class SyncZikApp(App):
         self._selected = playlist
         table = self.query_one("#song-table", DataTable)
         table.clear()
-        from snapshot_handler import load_snapshot
+        from .snapshot_handler import load_snapshot
         baseline_ids = {s.id for s in load_snapshot(playlist.service, playlist.service_id)}
         for song in playlist.songs:
             artist = song.artists[0].name if song.artists else "—"
@@ -369,7 +367,7 @@ class SyncZikApp(App):
                 playlist_id = playlist_id.rstrip("/").split("/")[-1].split("?")[0]
             try:
                 playlist = self._provider.get_playlist(playlist_id)
-                from snapshot_handler import save_playlist_state, save_snapshot
+                from .snapshot_handler import save_playlist_state, save_snapshot
                 save_snapshot(playlist.service, playlist.service_id, playlist.songs)
                 save_playlist_state(playlist)
                 self._refresh_playlist_tree()

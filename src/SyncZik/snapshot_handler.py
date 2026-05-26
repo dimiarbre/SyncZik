@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from syncer import Playlist, Song
+from .syncer import Playlist, Song
 
 
 # ---------------------------------------------------------------------------

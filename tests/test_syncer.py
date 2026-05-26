@@ -1,10 +1,5 @@
-import sys
-import os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "SyncZik"))
-
 import pytest
-from syncer import Artist, Song, Playlist
+from SyncZik.syncer import Artist, Song, Playlist
 
 
 def make_song(name="Track", id="id1", uri="spotify:track:id1") -> Song:

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 
-from syncer import Playlist, Song
-from utils import ServiceName
+from ..syncer import Playlist, Song
+from ..utils import ServiceName
 
 
 class ServiceProvider(ABC):
