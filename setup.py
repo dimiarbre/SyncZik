@@ -9,6 +9,7 @@ setup(
         "deezer-python",
         "python-dotenv",
         "setuptools",
+        "textual",
     ],
-    entry_points={"console_scripts": ["$PROJECT_NAME=SyncZik.main:main"]},
+    entry_points={"console_scripts": ["syncZik=SyncZik.SyncZik:main"]},
 )
