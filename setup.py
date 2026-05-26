@@ -11,5 +11,6 @@ setup(
         "setuptools",
         "textual",
     ],
+    extras_require={"dev": ["pytest"]},
     entry_points={"console_scripts": ["syncZik=SyncZik.SyncZik:main"]},
 )
