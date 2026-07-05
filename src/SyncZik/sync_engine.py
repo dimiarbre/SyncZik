@@ -100,8 +100,8 @@ def sync(provider: ServiceProvider, playlist: Playlist) -> MergeResult:
     local_added_ids = local_ids - baseline_ids
     local_removed_ids = baseline_ids - local_ids
 
-    # --- Remote additions → pull into local ---
-    for sid in remote_added_ids - local_removed_ids:
+    # --- Remote additions → pull into local (skip if already added locally) ---
+    for sid in remote_added_ids - local_removed_ids - local_added_ids:
         song = remote_by_id[sid]
         playlist.add_song(song)
         result.added_from_remote.append(song)
