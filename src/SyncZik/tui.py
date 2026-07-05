@@ -20,6 +20,7 @@ from textual.widgets.tree import TreeNode
 
 from .auth import get_spotify_client
 from .config import SPOTIFY_USER_ID
+from .cross_platform import ExportPlan, MatchKind, SongConflict, execute_export, plan_export
 from .playlist_git import cherry_pick, diff, fork_from_user, songs_in_playlist
 from .providers.spotify import SpotifyProvider
 from .snapshot_handler import list_playlists, save_playlist_state
@@ -237,6 +238,105 @@ class CherryPickModal(ModalScreen[list[Song]]):
 
 
 # ---------------------------------------------------------------------------
+# Export conflict resolver
+# ---------------------------------------------------------------------------
+
+class ExportConflictScreen(ModalScreen[list[Song]]):
+    """Walk the user through resolving each cross-platform export conflict.
+
+    For each SongConflict in the ExportPlan the user can:
+      - AMBIGUOUS: pick one of the candidates, or skip
+      - NOT_FOUND: search manually on the target, or skip
+
+    Dismisses with the list of target-platform songs to include in the export.
+    """
+
+    def __init__(
+        self,
+        plan: ExportPlan,
+        target_provider: SpotifyProvider,
+    ) -> None:
+        super().__init__()
+        self._plan = plan
+        self._target_provider = target_provider
+        self._resolved: list[Song] = [target for _, target in plan.auto_resolved]
+        self._queue: list[SongConflict] = list(plan.conflicts)
+        self._current: SongConflict | None = None
+        self._search_results: list[Song] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Export — resolve conflicts", id="dialog-title")
+            yield Static("", id="conflict-info")
+            yield Static("", id="conflict-counter")
+            yield ListView(id="conflict-candidates")
+            yield Input(placeholder="Search on target platform…", id="conflict-search")
+            with Horizontal(id="dialog-buttons"):
+                yield Button("Use selected", variant="primary", id="use-selected")
+                yield Button("Skip song", variant="warning", id="skip")
+                yield Button("Done (skip rest)", id="done")
+
+    def on_mount(self) -> None:
+        self._next_conflict()
+
+    def _next_conflict(self) -> None:
+        if not self._queue:
+            self.dismiss(self._resolved)
+            return
+        self._current = self._queue.pop(0)
+        remaining = len(self._queue) + 1
+        total_conflicts = len(self._plan.conflicts)
+        done = total_conflicts - remaining
+
+        counter = self.query_one("#conflict-counter", Static)
+        counter.update(f"Conflict {done + 1} of {total_conflicts}")
+
+        src = self._current.source
+        artist = src.artists[0].name if src.artists else "?"
+        kind_label = "Not found on target" if self._current.kind == MatchKind.NOT_FOUND else "Ambiguous match"
+        info = self.query_one("#conflict-info", Static)
+        info.update(
+            f"[yellow]{kind_label}[/yellow]\n"
+            f"[bold]{src.name}[/bold]  —  {artist}"
+        )
+
+        lv = self.query_one("#conflict-candidates", ListView)
+        lv.clear()
+        self._search_results = list(self._current.candidates)
+        for song in self._search_results:
+            a = song.artists[0].name if song.artists else "?"
+            lv.append(ListItem(Label(f"{song.name}  —  {a}")))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        query = event.value.strip()
+        if not query:
+            return
+        try:
+            results = self._target_provider.search_tracks(query, limit=8)
+        except Exception as e:
+            self.query_one("#conflict-info", Static).update(f"[red]Search error: {e}[/red]")
+            return
+        self._search_results = results
+        lv = self.query_one("#conflict-candidates", ListView)
+        lv.clear()
+        for song in results:
+            a = song.artists[0].name if song.artists else "?"
+            lv.append(ListItem(Label(f"{song.name}  —  {a}")))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "use-selected":
+            lv = self.query_one("#conflict-candidates", ListView)
+            idx = lv.index
+            if idx is not None and 0 <= idx < len(self._search_results):
+                self._resolved.append(self._search_results[idx])
+            self._next_conflict()
+        elif event.button.id == "skip":
+            self._next_conflict()
+        elif event.button.id == "done":
+            self.dismiss(self._resolved)
+
+
+# ---------------------------------------------------------------------------
 # Main app
 # ---------------------------------------------------------------------------
 
@@ -334,6 +434,26 @@ ModalScreen {
     margin-top: 1;
     color: $text-muted;
 }
+
+#conflict-info {
+    margin-top: 1;
+    margin-bottom: 1;
+}
+
+#conflict-counter {
+    color: $text-muted;
+    text-style: italic;
+}
+
+#conflict-candidates {
+    height: 8;
+    border: solid $panel;
+    margin-top: 1;
+}
+
+#conflict-search {
+    margin-top: 1;
+}
 """
 
 
@@ -348,6 +468,7 @@ class SyncZikApp(App):
         Binding("d", "remove_song", "Remove song"),
         Binding("l", "load_playlist", "Load playlist"),
         Binding("p", "cherry_pick", "Cherry-pick"),
+        Binding("e", "export_playlist", "Export"),
     ]
 
     def __init__(self) -> None:
@@ -376,6 +497,7 @@ class SyncZikApp(App):
             yield Button("Add song [A]", id="btn-add")
             yield Button("Remove [D]", id="btn-remove", variant="error")
             yield Button("Cherry-pick [P]", id="btn-pick", variant="success")
+            yield Button("Export [E]", id="btn-export")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -443,6 +565,7 @@ class SyncZikApp(App):
             "btn-add": self.action_add_song,
             "btn-remove": self.action_remove_song,
             "btn-pick": self.action_cherry_pick,
+            "btn-export": self.action_export_playlist,
         }
         handler = mapping.get(event.button.id or "")
         if handler:
@@ -582,6 +705,62 @@ class SyncZikApp(App):
                 self.notify("All selected songs already in playlist.", severity="warning")
 
         self.push_screen(CherryPickModal(self._provider, self._selected), on_result)
+
+    def action_export_playlist(self) -> None:
+        """Export the current playlist to another platform, resolving conflicts via GUI."""
+        if self._selected is None:
+            self.notify("Select a playlist first.", severity="warning")
+            return
+        if self._provider is None:
+            return
+
+        # For now we only support Spotify→Spotify re-export (Deezer coming soon).
+        # The architecture is ready: swap target_provider for a DeezerProvider instance.
+        target_provider = self._provider
+
+        def on_name(export_name: str | None) -> None:
+            if not export_name or self._selected is None:
+                return
+            user_id = SPOTIFY_USER_ID
+            if not user_id:
+                self.notify("SPOTIFY_USER_ID not set in .env", severity="error")
+                return
+            try:
+                export_plan = plan_export(self._selected.songs, target_provider)
+            except Exception as e:
+                self.notify(f"Export planning error: {e}", severity="error")
+                return
+
+            if export_plan.is_clean():
+                # No conflicts — execute immediately
+                songs = [t for _, t in export_plan.auto_resolved]
+                execute_export(
+                    target_provider, user_id, export_name, songs,
+                    description=f"Exported from {self._selected.name} — managed by SyncZik",
+                )
+                self.notify(f'Exported "{export_name}" ({len(songs)} songs, no conflicts)')
+                return
+
+            def on_resolved(resolved_songs: list[Song]) -> None:
+                try:
+                    execute_export(
+                        target_provider, user_id, export_name, resolved_songs,
+                        description=f"Exported from {self._selected.name} — managed by SyncZik",
+                    )
+                    skipped = export_plan.total() - len(resolved_songs)
+                    self.notify(
+                        f'Exported "{export_name}" ({len(resolved_songs)} songs'
+                        + (f", {skipped} skipped)" if skipped else ")")
+                    )
+                except Exception as e:
+                    self.notify(f"Export error: {e}", severity="error")
+
+            self.push_screen(ExportConflictScreen(export_plan, target_provider), on_resolved)
+
+        self.push_screen(
+            InputModal("Export playlist", f'Name for the export of "{self._selected.name}"'),
+            on_name,
+        )
 
 
 def run() -> None:
