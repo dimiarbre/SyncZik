@@ -20,6 +20,7 @@ from textual.widgets.tree import TreeNode
 
 from .auth import get_spotify_client
 from .config import SPOTIFY_USER_ID
+from .playlist_git import cherry_pick, diff, fork_from_user, songs_in_playlist
 from .providers.spotify import SpotifyProvider
 from .snapshot_handler import list_playlists, save_playlist_state
 from .sync_engine import (
@@ -156,6 +157,86 @@ class SyncResultModal(ModalScreen[list[Song]]):
 
 
 # ---------------------------------------------------------------------------
+# Cherry-pick modal
+# ---------------------------------------------------------------------------
+
+class CherryPickModal(ModalScreen[list[Song]]):
+    """Browse a remote playlist, show songs not in the target, let user pick."""
+
+    def __init__(self, provider: SpotifyProvider, target: Playlist) -> None:
+        super().__init__()
+        self._provider = provider
+        self._target = target
+        self._candidates: list[Song] = []
+        self._selected_ids: set[str] = set()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Cherry-pick from playlist", id="dialog-title")
+            yield Input(placeholder="Source playlist URL or ID…", id="pick-input")
+            yield Static("Enter a playlist URL then press Enter", id="pick-hint")
+            yield ListView(id="pick-list")
+            with Horizontal(id="dialog-buttons"):
+                yield Button("Pick selected", variant="primary", id="ok")
+                yield Button("Select all", id="select-all")
+                yield Button("Cancel", id="cancel")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        raw = event.value.strip()
+        if not raw:
+            return
+        if "/" in raw:
+            raw = raw.rstrip("/").split("/")[-1].split("?")[0]
+        try:
+            remote_songs = songs_in_playlist(self._provider, raw)
+        except Exception as e:
+            self.query_one("#pick-hint", Static).update(f"[red]Error: {e}[/red]")
+            return
+
+        target_ids = {s.id for s in self._target.songs}
+        self._candidates = [s for s in remote_songs if s.id not in target_ids]
+        self._selected_ids = set()
+
+        lv = self.query_one("#pick-list", ListView)
+        lv.clear()
+        hint = self.query_one("#pick-hint", Static)
+        if not self._candidates:
+            hint.update("[yellow]No new songs found — target already has everything.[/yellow]")
+            return
+        hint.update(f"{len(self._candidates)} new song(s) found. Space to toggle, then Pick.")
+        for song in self._candidates:
+            artist = song.artists[0].name if song.artists else "?"
+            lv.append(ListItem(Label(f"[ ] {song.name}  —  {artist}")))
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = self.query_one("#pick-list", ListView).index
+        if idx is None or idx >= len(self._candidates):
+            return
+        song = self._candidates[idx]
+        label = event.item.query_one(Label)
+        if song.id in self._selected_ids:
+            self._selected_ids.discard(song.id)
+            label.update(f"[ ] {song.name}  —  {song.artists[0].name if song.artists else '?'}")
+        else:
+            self._selected_ids.add(song.id)
+            label.update(f"[x] {song.name}  —  {song.artists[0].name if song.artists else '?'}")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss([])
+        elif event.button.id == "select-all":
+            lv = self.query_one("#pick-list", ListView)
+            lv.clear()
+            self._selected_ids = {s.id for s in self._candidates}
+            for song in self._candidates:
+                artist = song.artists[0].name if song.artists else "?"
+                lv.append(ListItem(Label(f"[x] {song.name}  —  {artist}")))
+        elif event.button.id == "ok":
+            by_id = {s.id: s for s in self._candidates}
+            self.dismiss([by_id[sid] for sid in self._selected_ids if sid in by_id])
+
+
+# ---------------------------------------------------------------------------
 # Main app
 # ---------------------------------------------------------------------------
 
@@ -242,6 +323,17 @@ ModalScreen {
 #sync-summary {
     margin-bottom: 1;
 }
+
+#pick-list {
+    height: 12;
+    border: solid $panel;
+    margin-top: 1;
+}
+
+#pick-hint {
+    margin-top: 1;
+    color: $text-muted;
+}
 """
 
 
@@ -255,6 +347,7 @@ class SyncZikApp(App):
         Binding("a", "add_song", "Add song"),
         Binding("d", "remove_song", "Remove song"),
         Binding("l", "load_playlist", "Load playlist"),
+        Binding("p", "cherry_pick", "Cherry-pick"),
     ]
 
     def __init__(self) -> None:
@@ -282,6 +375,7 @@ class SyncZikApp(App):
             yield Button("Sync [S]", id="btn-sync")
             yield Button("Add song [A]", id="btn-add")
             yield Button("Remove [D]", id="btn-remove", variant="error")
+            yield Button("Cherry-pick [P]", id="btn-pick", variant="success")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -348,6 +442,7 @@ class SyncZikApp(App):
             "btn-sync": self.action_sync_playlist,
             "btn-add": self.action_add_song,
             "btn-remove": self.action_remove_song,
+            "btn-pick": self.action_cherry_pick,
         }
         handler = mapping.get(event.button.id or "")
         if handler:
@@ -468,6 +563,25 @@ class SyncZikApp(App):
         if removed:
             self._show_songs(self._selected)
             self.notify(f'Removed "{song.name}" (staged — Sync to push)')
+
+    def action_cherry_pick(self) -> None:
+        if self._selected is None:
+            self.notify("Select a target playlist first.", severity="warning")
+            return
+        if self._provider is None:
+            return
+
+        def on_result(picked: list[Song]) -> None:
+            if not picked or self._selected is None:
+                return
+            added = cherry_pick(self._selected, picked)
+            if added:
+                self._show_songs(self._selected)
+                self.notify(f"Cherry-picked {len(added)} song(s) (staged — Sync to push)")
+            else:
+                self.notify("All selected songs already in playlist.", severity="warning")
+
+        self.push_screen(CherryPickModal(self._provider, self._selected), on_result)
 
 
 def run() -> None:
