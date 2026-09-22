@@ -54,7 +54,7 @@ def load_playlist_state(service: str, playlist_id: str) -> Optional[Playlist]:
 
 
 def list_playlists() -> list[Playlist]:
-    playlists = []
+    playlists: list[Playlist] = []
     state_dir = Path("state")
     if not state_dir.exists():
         return playlists
