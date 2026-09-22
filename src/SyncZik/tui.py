@@ -18,11 +18,14 @@ from textual.widgets import (
 )
 from textual.widgets.tree import TreeNode
 
-from .auth import get_spotify_client
+from .auth import get_deezer_client, get_spotify_client
 from .config import SPOTIFY_USER_ID
 from .cross_platform import ExportPlan, MatchKind, SongConflict, execute_export, plan_export
 from .playlist_git import cherry_pick, diff, fork_from_user, songs_in_playlist
+from .providers.base import ServiceProvider
+from .providers.deezer import DeezerProvider
 from .providers.spotify import SpotifyProvider
+from .utils import ServiceName
 from .snapshot_handler import list_playlists, save_playlist_state
 from .sync_engine import (
     MergeResult,
@@ -63,6 +66,26 @@ class InputModal(ModalScreen[str | None]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip() or None)
+
+
+class PlatformPickerModal(ModalScreen[ServiceName | None]):
+    """Let the user pick a target platform for export."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Export to which platform?", id="dialog-title")
+            with Horizontal(id="dialog-buttons"):
+                yield Button("Spotify", variant="primary", id="spotify")
+                yield Button("Deezer", id="deezer")
+                yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "spotify":
+            self.dismiss("spotify")
+        elif event.button.id == "deezer":
+            self.dismiss("deezer")
+        else:
+            self.dismiss(None)
 
 
 class SearchModal(ModalScreen[Song | None]):
@@ -254,7 +277,7 @@ class ExportConflictScreen(ModalScreen[list[Song]]):
     def __init__(
         self,
         plan: ExportPlan,
-        target_provider: SpotifyProvider,
+        target_provider: ServiceProvider,
     ) -> None:
         super().__init__()
         self._plan = plan
@@ -714,53 +737,68 @@ class SyncZikApp(App):
         if self._provider is None:
             return
 
-        # For now we only support Spotify→Spotify re-export (Deezer coming soon).
-        # The architecture is ready: swap target_provider for a DeezerProvider instance.
-        target_provider = self._provider
+        provider = self._provider
 
-        def on_name(export_name: str | None) -> None:
-            if not export_name or self._selected is None:
-                return
-            user_id = SPOTIFY_USER_ID
-            if not user_id:
-                self.notify("SPOTIFY_USER_ID not set in .env", severity="error")
-                return
-            try:
-                export_plan = plan_export(self._selected.songs, target_provider)
-            except Exception as e:
-                self.notify(f"Export planning error: {e}", severity="error")
+        def on_platform(platform: ServiceName | None) -> None:
+            if platform is None:
                 return
 
-            if export_plan.is_clean():
-                # No conflicts — execute immediately
-                songs = [t for _, t in export_plan.auto_resolved]
-                execute_export(
-                    target_provider, user_id, export_name, songs,
-                    description=f"Exported from {self._selected.name} — managed by SyncZik",
-                )
-                self.notify(f'Exported "{export_name}" ({len(songs)} songs, no conflicts)')
-                return
-
-            def on_resolved(resolved_songs: list[Song]) -> None:
+            target_provider: ServiceProvider
+            if platform == "spotify":
+                target_provider = provider
+                user_id = SPOTIFY_USER_ID
+                if not user_id:
+                    self.notify("SPOTIFY_USER_ID not set in .env", severity="error")
+                    return
+            else:
                 try:
+                    target_provider = DeezerProvider(get_deezer_client())
+                except RuntimeError as e:
+                    self.notify(str(e), severity="error")
+                    return
+                user_id = ""  # unused by DeezerProvider.create_playlist
+
+            def on_name(export_name: str | None) -> None:
+                if not export_name or self._selected is None:
+                    return
+                try:
+                    export_plan = plan_export(self._selected.songs, target_provider)
+                except Exception as e:
+                    self.notify(f"Export planning error: {e}", severity="error")
+                    return
+
+                if export_plan.is_clean():
+                    # No conflicts — execute immediately
+                    songs = [t for _, t in export_plan.auto_resolved]
                     execute_export(
-                        target_provider, user_id, export_name, resolved_songs,
+                        target_provider, user_id, export_name, songs,
                         description=f"Exported from {self._selected.name} — managed by SyncZik",
                     )
-                    skipped = export_plan.total() - len(resolved_songs)
-                    self.notify(
-                        f'Exported "{export_name}" ({len(resolved_songs)} songs'
-                        + (f", {skipped} skipped)" if skipped else ")")
-                    )
-                except Exception as e:
-                    self.notify(f"Export error: {e}", severity="error")
+                    self.notify(f'Exported "{export_name}" ({len(songs)} songs, no conflicts)')
+                    return
 
-            self.push_screen(ExportConflictScreen(export_plan, target_provider), on_resolved)
+                def on_resolved(resolved_songs: list[Song]) -> None:
+                    try:
+                        execute_export(
+                            target_provider, user_id, export_name, resolved_songs,
+                            description=f"Exported from {self._selected.name} — managed by SyncZik",
+                        )
+                        skipped = export_plan.total() - len(resolved_songs)
+                        self.notify(
+                            f'Exported "{export_name}" ({len(resolved_songs)} songs'
+                            + (f", {skipped} skipped)" if skipped else ")")
+                        )
+                    except Exception as e:
+                        self.notify(f"Export error: {e}", severity="error")
 
-        self.push_screen(
-            InputModal("Export playlist", f'Name for the export of "{self._selected.name}"'),
-            on_name,
-        )
+                self.push_screen(ExportConflictScreen(export_plan, target_provider), on_resolved)
+
+            self.push_screen(
+                InputModal("Export playlist", f'Name for the export of "{self._selected.name}"'),
+                on_name,
+            )
+
+        self.push_screen(PlatformPickerModal(), on_platform)
 
 
 def run() -> None:
