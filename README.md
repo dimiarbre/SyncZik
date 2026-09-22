@@ -30,7 +30,7 @@ SyncZik brings a git-like workflow to your music playlists:
 | Platform | Read | Write | Clone source | Clone target |
 |----------|------|-------|-------------|--------------|
 | Spotify  | ✓    | ✓     | ✓           | ✓            |
-| Deezer   | planned | planned | planned | planned   |
+| Deezer   | ✓    | ✓     | planned     | planned      |
 
 ## Setup
 
@@ -53,7 +53,15 @@ SPOTIFY_REDIRECT_URI=http://localhost:8888/callback
 SPOTIFY_USER_ID=your_spotify_username
 ```
 
-### 3. Run
+### 3. Deezer credentials (optional, needed to export to Deezer)
+
+Register an app at [developers.deezer.com](https://developers.deezer.com), then complete Deezer's OAuth authorize redirect once in a browser to get an access token (SyncZik doesn't automate this step the way it does for Spotify — there's no refresh flow, so if the token expires you'll need to repeat this and update `.env`). Add it to `.env`:
+
+```env
+DEEZER_ACCESS_TOKEN=your_access_token
+```
+
+### 4. Run
 
 ```bash
 syncZik
@@ -116,7 +124,7 @@ src/SyncZik/
 ├── providers/
 │   ├── base.py           # ServiceProvider ABC — unified API for all platforms
 │   ├── spotify.py        # SpotifyProvider (full read + write)
-│   └── deezer.py         # DeezerProvider (stub, planned)
+│   └── deezer.py         # DeezerProvider (full read + write)
 ├── syncer.py             # Playlist, Song, Artist data models
 ├── snapshot_handler.py   # Local state and baseline snapshot persistence
 ├── sync_engine.py        # Clone / sync (bidirectional merge) logic
@@ -167,7 +175,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-104 tests covering models, sync merge logic, snapshot handler, playlist git operations, and cross-platform export logic. All tests are fully mocked — no real API calls required.
+116 tests covering models, sync merge logic, snapshot handler, playlist git operations, cross-platform export logic, and provider implementations. All tests are fully mocked — no real API calls required.
 
 ---
 
@@ -186,12 +194,12 @@ pytest
 - [x] TUI: Cherry-pick modal — browse another playlist, toggle and pick songs
 - [x] `cross_platform.py`: `plan_export`, `execute_export`, `_normalize` (feat. stripping)
 - [x] TUI: Export conflict resolver screen — AMBIGUOUS / NOT_FOUND handled per-song
-- [x] 104 passing tests (snapshot handler, sync engine edge cases, playlist git, cross-platform)
 - [x] `setup.cfg` with `pythonpath = src` for correct test resolution in all contexts
+- [x] **Deezer write support** — `DeezerProvider.create_playlist`/`add_songs`/`remove_songs` via deezer-python; TUI export flow can now target Deezer
+- [x] 116 passing tests (snapshot handler, sync engine edge cases, playlist git, cross-platform, providers)
 
 ### Next steps
 
-- [ ] **Deezer write support** — implement `DeezerProvider.create_playlist`, `add_songs`, `remove_songs` using the deezer-python library; unlock true Spotify→Deezer export
 - [ ] **Song matching quality** — improve `_normalize()` with transliteration (accented chars), edit-distance fallback for very similar titles
 - [ ] **Integration tests** — `tests/integration/` directory with `@pytest.mark.integration` tests that hit the real Spotify API using a fixed test playlist (skip unless credentials present)
 - [ ] **CLI interface** — expose `clone`, `sync`, `cherry-pick`, `export` as `syncZik clone <url>` subcommands for scripting and CI use

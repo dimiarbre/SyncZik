@@ -1,7 +1,13 @@
+import deezer
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
-from .config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI
+from .config import (
+    DEEZER_ACCESS_TOKEN,
+    SPOTIFY_CLIENT_ID,
+    SPOTIFY_CLIENT_SECRET,
+    SPOTIFY_REDIRECT_URI,
+)
 
 _SCOPES = " ".join([
     "playlist-modify-public",
@@ -32,3 +38,25 @@ def get_spotify_client() -> spotipy.Spotify:
         )
         _spotify_client = spotipy.Spotify(auth_manager=auth_manager)
     return _spotify_client
+
+
+_deezer_client: deezer.Client | None = None
+
+
+def get_deezer_client() -> deezer.Client:
+    """Return a cached Deezer client authenticated with DEEZER_ACCESS_TOKEN.
+
+    Unlike Spotify there is no OAuth dance to perform here: the user must obtain
+    a Deezer access token manually (register an app at developers.deezer.com,
+    complete the OAuth authorize redirect once, and paste the resulting token
+    into .env) before running SyncZik. See README for details.
+    """
+    global _deezer_client
+    if _deezer_client is None:
+        if not DEEZER_ACCESS_TOKEN:
+            raise RuntimeError(
+                "DEEZER_ACCESS_TOKEN not set in .env. "
+                "See README for how to obtain a Deezer access token."
+            )
+        _deezer_client = deezer.Client(access_token=DEEZER_ACCESS_TOKEN)
+    return _deezer_client
