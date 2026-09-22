@@ -1,6 +1,4 @@
-import json
-import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from pathlib import Path
 
 import pytest
@@ -211,3 +209,90 @@ class TestApplyRemoteRemoval:
         apply_remote_removal(provider, p, [b])
         assert b not in p.songs
         assert a in p.songs
+
+    def test_empty_list_is_noop(self):
+        a = make_song("A", "a")
+        p = make_playlist([a])
+        provider = make_provider([a])
+        apply_remote_removal(provider, p, [])
+        assert a in p.songs
+
+    def test_persists_state_after_removal(self):
+        a, b = make_song("A", "a"), make_song("B", "b")
+        p = make_playlist([a, b])
+        provider = make_provider([a])
+        apply_remote_removal(provider, p, [b])
+        assert Path("state/spotify/pl1.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# sync() — additional edge cases
+# ---------------------------------------------------------------------------
+
+class TestSyncEdgeCases:
+    def _setup(self, baseline, local, remote):
+        import SyncZik.snapshot_handler as sh
+        playlist = make_playlist(local)
+        sh.save_snapshot("spotify", playlist.service_id, baseline)
+        sh.save_playlist_state(playlist)
+        return playlist
+
+    def test_empty_playlist_sync_is_clean(self):
+        playlist = self._setup(baseline=[], local=[], remote=[])
+        provider = make_provider([])
+        provider.fetch_songs.return_value = []
+        result = sync(provider, playlist)
+        assert result.is_clean()
+
+    def test_conflict_local_added_remote_also_added_same_song(self):
+        # Both sides added the same new song independently → no double-add
+        a, b = make_song("A", "a"), make_song("B", "b")
+        playlist = self._setup(baseline=[a], local=[a, b], remote=[a, b])
+        provider = make_provider([a, b])
+        provider.fetch_songs.side_effect = [[a, b], [a, b]]
+        result = sync(provider, playlist)
+        # b was added on both sides since baseline → not pushed (already there), not pulled (already local)
+        assert b not in result.pushed_to_remote
+        assert b not in result.added_from_remote
+
+    def test_many_songs_all_pulled(self):
+        a = make_song("A", "a")
+        new_songs = [make_song(str(i), str(i)) for i in range(20)]
+        playlist = self._setup(baseline=[a], local=[a], remote=[a] + new_songs)
+        provider = make_provider([a] + new_songs)
+        provider.fetch_songs.side_effect = [[a] + new_songs, [a] + new_songs]
+        result = sync(provider, playlist)
+        assert len(result.added_from_remote) == 20
+
+    def test_sync_after_empty_baseline_pulls_everything(self):
+        # Simulates first sync after load: baseline is empty, remote has songs
+        songs = [make_song("A", "a"), make_song("B", "b")]
+        playlist = self._setup(baseline=[], local=[], remote=songs)
+        provider = make_provider(songs)
+        provider.fetch_songs.side_effect = [songs, songs]
+        result = sync(provider, playlist)
+        assert len(result.added_from_remote) == 2
+
+    def test_merge_result_is_clean_only_when_all_lists_empty(self):
+        r = MergeResult()
+        assert r.is_clean()
+        r.added_from_remote.append(make_song())
+        assert not r.is_clean()
+
+    def test_clone_empty_source(self):
+        provider = make_provider([], new_playlist_id="empty_clone")
+        p = clone(provider, "user", "source_id", "Empty Clone")
+        assert p.songs == []
+        assert Path("state/spotify/empty_clone.json").exists()
+
+    def test_sync_updates_last_synced_timestamp(self):
+        songs = [make_song("A", "a")]
+        import SyncZik.snapshot_handler as sh
+        playlist = make_playlist(songs)
+        sh.save_snapshot("spotify", playlist.service_id, songs)
+        sh.save_playlist_state(playlist)
+        provider = make_provider(songs)
+        provider.fetch_songs.return_value = list(songs)
+        assert playlist.last_synced is None
+        sync(provider, playlist)
+        assert playlist.last_synced is not None
