@@ -30,7 +30,9 @@ SyncZik brings a git-like workflow to your music playlists:
 | Platform | Read | Write | Clone source | Clone target |
 |----------|------|-------|-------------|--------------|
 | Spotify  | ✓    | ✓     | ✓           | ✓            |
-| Deezer   | ✓    | ✓     | planned     | planned      |
+| Deezer   | ✓    | ✓     | ✓           | ✓            |
+
+Choose your home provider (Spotify or Deezer) at startup — that's the platform Load/Clone/Sync operate against. Export can target either platform regardless of your home provider.
 
 ## Setup
 
@@ -53,7 +55,7 @@ SPOTIFY_REDIRECT_URI=http://localhost:8888/callback
 SPOTIFY_USER_ID=your_spotify_username
 ```
 
-### 3. Deezer credentials (optional, needed to export to Deezer)
+### 3. Deezer credentials (needed to use Deezer as your home provider or as an export target)
 
 Register an app at [developers.deezer.com](https://developers.deezer.com), then complete Deezer's OAuth authorize redirect once in a browser to get an access token (SyncZik doesn't automate this step the way it does for Spotify — there's no refresh flow, so if the token expires you'll need to repeat this and update `.env`). Add it to `.env`:
 
@@ -67,7 +69,7 @@ DEEZER_ACCESS_TOKEN=your_access_token
 syncZik
 ```
 
-A browser window opens for Spotify login on first run. The TUI launches after authentication.
+On first launch you're asked to choose your home provider (Spotify or Deezer). Choosing Spotify opens a browser window for login; the TUI launches after authentication (or immediately for Deezer, using `DEEZER_ACCESS_TOKEN`).
 
 ## TUI usage
 
@@ -91,10 +93,10 @@ A browser window opens for Spotify login on first run. The TUI launches after au
 
 | Key / Button    | Action |
 |-----------------|--------|
-| `L`             | **Load** — paste a Spotify playlist URL or ID to import it locally |
-| `C`             | **Clone** — fork the selected playlist; creates a new Spotify playlist and tracks it |
+| `L`             | **Load** — paste a playlist URL or ID from your home provider to import it locally |
+| `C`             | **Clone** — fork the selected playlist; creates a new playlist on your home provider and tracks it |
 | `S`             | **Sync** — bidirectional merge: pushes local changes, pulls remote changes |
-| `A`             | **Add song** — search Spotify and stage a song (shown as `[local]` until Sync) |
+| `A`             | **Add song** — search your home provider and stage a song (shown as `[local]` until Sync) |
 | `D`             | **Remove** — stage the selected song for removal (applied on next Sync) |
 | `P`             | **Cherry-pick** — enter another playlist URL, browse songs not in your playlist, pick any |
 | `E`             | **Export** — export to another platform; conflicts resolved song-by-song in a GUI dialog |
@@ -105,7 +107,7 @@ A browser window opens for Spotify login on first run. The TUI launches after au
 1. Select a target playlist.
 2. Press `P`, paste the source playlist URL.
 3. Songs not yet in your playlist appear. Toggle with Space, then **Pick selected** or **Select all**.
-4. Picked songs are staged locally — press `S` to push them to Spotify.
+4. Picked songs are staged locally — press `S` to push them to your home provider.
 
 ### Export workflow
 
@@ -175,7 +177,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-116 tests covering models, sync merge logic, snapshot handler, playlist git operations, cross-platform export logic, and provider implementations. All tests are fully mocked — no real API calls required.
+124 tests covering models, sync merge logic, snapshot handler, playlist git operations, cross-platform export logic, provider implementations, and TUI provider-selection helpers. All tests are fully mocked — no real API calls required. CI runs `pytest` and `mypy` on every push/PR (see `.github/workflows/ci.yml`).
 
 ---
 
@@ -196,7 +198,9 @@ pytest
 - [x] TUI: Export conflict resolver screen — AMBIGUOUS / NOT_FOUND handled per-song
 - [x] `setup.cfg` with `pythonpath = src` for correct test resolution in all contexts
 - [x] **Deezer write support** — `DeezerProvider.create_playlist`/`add_songs`/`remove_songs` via deezer-python; TUI export flow can now target Deezer
-- [x] 116 passing tests (snapshot handler, sync engine edge cases, playlist git, cross-platform, providers)
+- [x] **Deezer as home provider** — choose Spotify or Deezer at TUI startup; Load/Clone/Sync/Search all work against whichever is active
+- [x] CI (`pytest` + `mypy`) on every push/PR; MIT license
+- [x] 124 passing tests (snapshot handler, sync engine edge cases, playlist git, cross-platform, providers, TUI helpers)
 
 ### Next steps
 
