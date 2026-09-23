@@ -28,6 +28,18 @@ def get_spotify_client() -> spotipy.Spotify:
     """
     global _spotify_client
     if _spotify_client is None:
+        missing = [
+            name for name, value in (
+                ("SPOTIFY_CLIENT_ID", SPOTIFY_CLIENT_ID),
+                ("SPOTIFY_CLIENT_SECRET", SPOTIFY_CLIENT_SECRET),
+            )
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(
+                "Missing required .env variable(s) for Spotify: " + ", ".join(missing) +
+                ". Copy .env.example to .env and fill it in — see README's Setup section."
+            )
         auth_manager = SpotifyOAuth(
             client_id=SPOTIFY_CLIENT_ID,
             client_secret=SPOTIFY_CLIENT_SECRET,
