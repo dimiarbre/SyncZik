@@ -5,10 +5,13 @@ import pytest
 from SyncZik.syncer import Artist, Song, Playlist
 from SyncZik.providers.base import ServiceProvider
 from SyncZik.playlist_git import (
+    LogEntry,
     PlaylistDiff,
     cherry_pick,
     diff,
     fork_from_user,
+    log,
+    revert,
     songs_in_playlist,
 )
 import SyncZik.snapshot_handler as sh
@@ -165,7 +168,7 @@ class TestForkFromUser:
         provider = make_provider(songs, new_id="forked123")
         fork_from_user(provider, "user", "source_pl", "My Fork")
         assert Path("state/spotify/forked123.json").exists()
-        assert Path("snapshots/spotify/forked123.json").exists()
+        assert list(Path("snapshots/spotify/forked123").glob("*.json"))
 
     def test_fork_includes_custom_description(self):
         songs = [make_song("A", "a")]
@@ -190,3 +193,73 @@ class TestSongsInPlaylist:
         provider = make_provider([])
         result = songs_in_playlist(provider, "empty")
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# log() — derived from the versioned snapshot history
+# ---------------------------------------------------------------------------
+
+class TestLog:
+    def test_empty_when_nothing_recorded(self):
+        assert log("spotify", "pl1") == []
+
+    def test_single_version_reports_all_songs_as_added(self):
+        a, b = make_song("A", "a"), make_song("B", "b")
+        sh.save_snapshot("spotify", "pl1", [a, b])
+        entries = log("spotify", "pl1")
+        assert len(entries) == 1
+        assert {s.id for s in entries[0].added} == {"a", "b"}
+        assert entries[0].removed == []
+        assert entries[0].total_songs == 2
+
+    def test_reports_added_and_removed_between_versions(self):
+        a, b, c = make_song("A", "a"), make_song("B", "b"), make_song("C", "c")
+        sh.save_snapshot("spotify", "pl1", [a, b])
+        sh.save_snapshot("spotify", "pl1", [a, c])  # b removed, c added
+        entries = log("spotify", "pl1")
+        assert len(entries) == 2
+        newest = entries[0]
+        assert {s.id for s in newest.added} == {"c"}
+        assert {s.id for s in newest.removed} == {"b"}
+        assert newest.total_songs == 2
+
+    def test_newest_first(self):
+        sh.save_snapshot("spotify", "pl1", [make_song("A", "a")])
+        sh.save_snapshot("spotify", "pl1", [make_song("A", "a"), make_song("B", "b")])
+        entries = log("spotify", "pl1")
+        assert entries[0].timestamp > entries[1].timestamp
+
+
+# ---------------------------------------------------------------------------
+# revert() — local-only restore to a past snapshot version
+# ---------------------------------------------------------------------------
+
+class TestRevert:
+    def test_restores_local_songs_to_past_version(self):
+        a, b = make_song("A", "a"), make_song("B", "b")
+        sh.save_snapshot("spotify", "pl1", [a])
+        old_versions = sh.list_snapshot_versions("spotify", "pl1")
+        sh.save_snapshot("spotify", "pl1", [a, b])
+
+        playlist = make_playlist(songs=[a, b])
+        result = revert(playlist, old_versions[0].timestamp)
+
+        assert {s.id for s in result.songs} == {"a"}
+        assert result is playlist
+
+    def test_persists_reverted_state(self):
+        a = make_song("A", "a")
+        sh.save_snapshot("spotify", "pl1", [a])
+        [version] = sh.list_snapshot_versions("spotify", "pl1")
+        playlist = make_playlist(songs=[a, make_song("B", "b")])
+
+        revert(playlist, version.timestamp)
+
+        loaded = sh.load_playlist_state("spotify", "pl1")
+        assert {s.id for s in loaded.songs} == {"a"}
+
+    def test_raises_for_unknown_timestamp(self):
+        from datetime import datetime, timezone
+        playlist = make_playlist(songs=[make_song()])
+        with pytest.raises(ValueError):
+            revert(playlist, datetime(2000, 1, 1, tzinfo=timezone.utc))

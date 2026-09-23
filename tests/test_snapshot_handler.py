@@ -5,6 +5,8 @@ import pytest
 from SyncZik.syncer import Artist, Song, Playlist
 import SyncZik.snapshot_handler as sh
 from SyncZik.snapshot_handler import (
+    delete_playlist,
+    list_snapshot_versions,
     save_snapshot,
     load_snapshot,
     save_playlist_state,
@@ -50,7 +52,7 @@ class TestSnapshotRoundTrip:
 
     def test_creates_directory_if_missing(self):
         save_snapshot("deezer", "pl2", [make_song()])
-        assert Path("snapshots/deezer/pl2.json").exists()
+        assert list(Path("snapshots/deezer/pl2").glob("*.json"))
 
     def test_overwrites_existing(self):
         save_snapshot("spotify", "pl1", [make_song("Old", "old")])
@@ -93,6 +95,75 @@ class TestSnapshotRoundTrip:
 
 
 # ---------------------------------------------------------------------------
+# Snapshot versioning (history) and legacy flat-file fallback
+# ---------------------------------------------------------------------------
+
+class TestSnapshotVersioning:
+    def test_load_snapshot_returns_latest_version(self):
+        save_snapshot("spotify", "pl1", [make_song("Old", "old")])
+        save_snapshot("spotify", "pl1", [make_song("New", "new")])
+        loaded = load_snapshot("spotify", "pl1")
+        assert len(loaded) == 1
+        assert loaded[0].id == "new"
+
+    def test_list_snapshot_versions_newest_first(self):
+        save_snapshot("spotify", "pl1", [make_song("A", "a")])
+        save_snapshot("spotify", "pl1", [make_song("A", "a"), make_song("B", "b")])
+        versions = list_snapshot_versions("spotify", "pl1")
+        assert len(versions) == 2
+        assert versions[0].timestamp > versions[1].timestamp
+        assert {s.id for s in versions[0].songs} == {"a", "b"}
+        assert {s.id for s in versions[1].songs} == {"a"}
+
+    def test_list_snapshot_versions_empty_when_none_saved(self):
+        assert list_snapshot_versions("spotify", "nonexistent") == []
+
+    def test_load_snapshot_falls_back_to_legacy_flat_file(self):
+        # Simulates a pre-history install: a flat snapshots/{service}/{id}.json
+        # file with no versioned directory yet.
+        legacy_dir = Path("snapshots/spotify")
+        legacy_dir.mkdir(parents=True)
+        (legacy_dir / "pl1.json").write_text(json.dumps([make_song("Legacy", "legacy").to_dict()]))
+        loaded = load_snapshot("spotify", "pl1")
+        assert len(loaded) == 1
+        assert loaded[0].id == "legacy"
+
+    def test_new_save_takes_precedence_over_legacy_file(self):
+        legacy_dir = Path("snapshots/spotify")
+        legacy_dir.mkdir(parents=True)
+        (legacy_dir / "pl1.json").write_text(json.dumps([make_song("Legacy", "legacy").to_dict()]))
+        save_snapshot("spotify", "pl1", [make_song("New", "new")])
+        loaded = load_snapshot("spotify", "pl1")
+        assert loaded[0].id == "new"
+
+
+# ---------------------------------------------------------------------------
+# delete_playlist — untrack locally, remote untouched
+# ---------------------------------------------------------------------------
+
+class TestDeletePlaylist:
+    def test_removes_state_file(self):
+        save_playlist_state(make_playlist(songs=[make_song()]))
+        delete_playlist("spotify", "pl1")
+        assert load_playlist_state("spotify", "pl1") is None
+
+    def test_removes_snapshot_history(self):
+        save_snapshot("spotify", "pl1", [make_song()])
+        delete_playlist("spotify", "pl1")
+        assert list_snapshot_versions("spotify", "pl1") == []
+
+    def test_removes_legacy_snapshot_file(self):
+        legacy_dir = Path("snapshots/spotify")
+        legacy_dir.mkdir(parents=True)
+        (legacy_dir / "pl1.json").write_text("[]")
+        delete_playlist("spotify", "pl1")
+        assert not (legacy_dir / "pl1.json").exists()
+
+    def test_noop_when_nothing_tracked(self):
+        delete_playlist("spotify", "ghost")  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # Atomic writes
 # ---------------------------------------------------------------------------
 
@@ -112,7 +183,7 @@ class TestAtomicWrite:
 
     def test_no_leftover_tmp_file_after_successful_save(self):
         save_snapshot("spotify", "pl1", [make_song()])
-        assert list(Path("snapshots/spotify").glob("*.tmp")) == []
+        assert list(Path("snapshots/spotify/pl1").glob("*.tmp")) == []
 
     def test_no_leftover_tmp_file_after_failed_save(self, monkeypatch):
         def boom(*args, **kwargs):
@@ -122,7 +193,7 @@ class TestAtomicWrite:
         with pytest.raises(RuntimeError):
             save_snapshot("spotify", "pl1", [make_song()])
 
-        assert list(Path("snapshots/spotify").glob("*.tmp")) == []
+        assert list(Path("snapshots/spotify/pl1").glob("*.tmp")) == []
 
     def test_playlist_state_write_is_also_atomic(self, monkeypatch):
         save_playlist_state(make_playlist(songs=[make_song("Old", "old")]))
