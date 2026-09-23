@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Callable, Literal, TypeVar
@@ -54,9 +55,11 @@ from .sync_engine import (
     sync,
     untrack_playlist,
 )
+from .logging_setup import log_path
 from .syncer import Playlist, Song
 
 T = TypeVar("T")
+_logger = logging.getLogger("SyncZik")
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +669,10 @@ class HelpModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label("Help", id="dialog-title")
-            yield Static(HELP_TEXT, id="help-text")
+            yield Static(
+                f"{HELP_TEXT}\nErrors and warnings are also logged to:\n{log_path()}",
+                id="help-text",
+            )
             with Horizontal(id="dialog-buttons"):
                 yield Button("Close", variant="primary", id="close")
 
@@ -943,6 +949,15 @@ class SyncZikApp(App):
         self._playlists: list[Playlist] = []
         self._selected: Playlist | None = None
         self._last_action: tuple[Literal["add", "remove"], Playlist, list[Song]] | None = None
+
+    def notify(self, message: str, **kwargs: object) -> None:
+        # Toasts disappear; also capture errors/warnings to the log file so a
+        # bug report has an actual trace to attach, not just what the user
+        # remembers seeing flash by.
+        severity = kwargs.get("severity")
+        if severity in ("error", "warning"):
+            _logger.log(logging.ERROR if severity == "error" else logging.WARNING, message)
+        super().notify(message, **kwargs)  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
     # Layout
@@ -1397,6 +1412,8 @@ class SyncZikApp(App):
 
 
 def run() -> None:
+    from .logging_setup import setup_logging
+    setup_logging()  # no-op if the CLI entry point already set this up
     SyncZikApp().run()
 
 
