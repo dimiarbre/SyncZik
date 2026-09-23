@@ -7,6 +7,9 @@ from SyncZik.cross_platform import (
     ExportPlan,
     MatchKind,
     SongConflict,
+    _best_exact_match,
+    _duration_diff_ms,
+    _isrc_match,
     _normalize,
     _is_exact_match,
     execute_export,
@@ -14,12 +17,14 @@ from SyncZik.cross_platform import (
 )
 
 
-def make_song(name="Track", artist="Artist", id="s1", uri=None) -> Song:
+def make_song(name="Track", artist="Artist", id="s1", uri=None, isrc=None, duration_ms=None) -> Song:
     return Song(
         name=name,
         artists=[Artist(artist, f"{artist.lower()}_id")],
         uri=uri or f"spotify:track:{id}",
         id=id,
+        isrc=isrc,
+        duration_ms=duration_ms,
     )
 
 
@@ -102,6 +107,63 @@ class TestIsExactMatch:
         source = make_song("BOHEMIAN RHAPSODY", "QUEEN", "s1")
         candidate = make_song("bohemian rhapsody", "queen", "d1")
         assert _is_exact_match(source, candidate)
+
+
+# ---------------------------------------------------------------------------
+# _isrc_match() / _duration_diff_ms() / _best_exact_match()
+# ---------------------------------------------------------------------------
+
+class TestIsrcMatch:
+    def test_matches_on_shared_isrc(self):
+        source = make_song("A", "Art", "s1", isrc="US1234567890")
+        candidate = make_song("A", "Art", "d1", isrc="US1234567890")
+        assert _isrc_match(source, candidate)
+
+    def test_no_match_without_isrc_on_either_side(self):
+        source = make_song("A", "Art", "s1")
+        candidate = make_song("A", "Art", "d1")
+        assert not _isrc_match(source, candidate)
+
+    def test_no_match_on_different_isrc(self):
+        source = make_song("A", "Art", "s1", isrc="US1")
+        candidate = make_song("A", "Art", "d1", isrc="US2")
+        assert not _isrc_match(source, candidate)
+
+
+class TestDurationDiffMs:
+    def test_returns_absolute_difference(self):
+        source = make_song(duration_ms=200_000)
+        candidate = make_song(duration_ms=210_000)
+        assert _duration_diff_ms(source, candidate) == 10_000
+
+    def test_none_when_either_side_missing(self):
+        source = make_song(duration_ms=200_000)
+        candidate = make_song()
+        assert _duration_diff_ms(source, candidate) is None
+
+
+class TestBestExactMatch:
+    def test_single_exact_match_returned(self):
+        source = make_song("Song", "Artist", "s1")
+        candidate = make_song("Song", "Artist", "d1")
+        assert _best_exact_match(source, [candidate]) is candidate
+
+    def test_no_exact_match_returns_none(self):
+        source = make_song("Song", "Artist", "s1")
+        candidate = make_song("Different", "Artist", "d1")
+        assert _best_exact_match(source, [candidate]) is None
+
+    def test_tiebreaks_on_closest_duration(self):
+        source = make_song("Song", "Artist", "s1", duration_ms=200_000)
+        remix = make_song("Song", "Artist", "d1", duration_ms=340_000)
+        studio = make_song("Song", "Artist", "d2", duration_ms=201_000)
+        assert _best_exact_match(source, [remix, studio]) is studio
+
+    def test_falls_back_to_first_when_no_duration_info(self):
+        source = make_song("Song", "Artist", "s1")
+        first = make_song("Song", "Artist", "d1")
+        second = make_song("Song", "Artist", "d2")
+        assert _best_exact_match(source, [first, second]) is first
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +255,23 @@ class TestPlanExport:
         call_args = provider.search_tracks.call_args
         assert "One More Time" in call_args[0][0]
         assert "Daft Punk" in call_args[0][0]
+
+    def test_isrc_match_wins_even_with_different_title(self):
+        source = make_song("Original Title", "Artist", "s1", isrc="US1234567890")
+        candidate = make_song("Completely Different Title", "Someone Else", "d1", isrc="US1234567890")
+        provider = make_provider([candidate])
+        plan = plan_export([source], provider)
+        assert plan.is_clean()
+        assert plan.auto_resolved[0][1].id == "d1"
+
+    def test_duration_tiebreak_prefers_studio_over_remix(self):
+        source = make_song("Song", "Artist", "s1", duration_ms=200_000)
+        remix = make_song("Song", "Artist", "d1", duration_ms=340_000)
+        studio = make_song("Song", "Artist", "d2", duration_ms=201_000)
+        provider = make_provider([remix, studio])  # remix ranked first by search
+        plan = plan_export([source], provider)
+        assert plan.is_clean()
+        assert plan.auto_resolved[0][1].id == "d2"
 
 
 # ---------------------------------------------------------------------------
