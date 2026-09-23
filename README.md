@@ -100,13 +100,18 @@ On first launch you're asked to choose your home provider (Spotify or Deezer). C
 | `D`             | **Remove** — stage the selected song for removal (applied on next Sync) |
 | `P`             | **Cherry-pick** — enter another playlist URL, browse songs not in your playlist, pick any |
 | `E`             | **Export** — export to another platform; conflicts resolved song-by-song in a GUI dialog |
+| `V`             | **Diff** — compare the selected playlist against another tracked one, song-by-song |
+| `U`             | **Undo** — undo the last staged Add/Remove/Cherry-pick |
+| `?`             | **Help** — keybinding and workflow reference |
 | `Q`             | Quit |
+
+Network calls (Load/Clone/Sync/Search/Export/Cherry-pick) run off the UI thread with a loading indicator, so the app stays responsive on large playlists. Every dialog can be backed out of with `Escape`.
 
 ### Cherry-pick workflow
 
 1. Select a target playlist.
 2. Press `P`, paste the source playlist URL.
-3. Songs not yet in your playlist appear. Toggle with Space, then **Pick selected** or **Select all**.
+3. Songs not yet in your playlist appear. Toggle with Enter or Space, then **Pick selected** or **Select all**.
 4. Picked songs are staged locally — press `S` to push them to your home provider.
 
 ### Export workflow
@@ -181,7 +186,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-179 tests covering models, sync merge logic (including partial-failure and order-preservation edge cases), snapshot handler (including atomic-write failure), retry/backoff behavior, provider implementations for both Spotify and Deezer (including error translation), playlist git operations, cross-platform export logic (including ISRC and duration-tiebreak matching), and TUI provider-selection helpers. All tests are fully mocked — no real API calls required. CI runs `pytest` and `mypy` on every push/PR (see `.github/workflows/ci.yml`).
+204 tests covering models, sync merge logic (including partial-failure and order-preservation edge cases), snapshot handler (including atomic-write failure), retry/backoff behavior, provider implementations for both Spotify and Deezer (including error translation), playlist git operations, cross-platform export logic (including ISRC and duration-tiebreak matching), and the TUI (provider selection, the async worker helper behind non-blocking network calls, undo, diff, per-song sync conflict resolution, cherry-pick's toggle fix, and escape-to-cancel), driven end-to-end with Textual's `Pilot`/`run_test()`. All tests are fully mocked — no real API calls required. CI runs `pytest` and `mypy` on every push/PR (see `.github/workflows/ci.yml`).
 
 ---
 
@@ -205,7 +210,8 @@ pytest
 - [x] **Deezer as home provider** — choose Spotify or Deezer at TUI startup; Load/Clone/Sync/Search all work against whichever is active
 - [x] CI (`pytest` + `mypy`) on every push/PR; MIT license
 - [x] **Reliability foundation** — retry/backoff with `Retry-After` support on rate limits and transient errors, `SyncZikError` translation at the provider boundary, atomic state/snapshot writes, partial-sync-failure reporting, ISRC-first cross-platform matching with a duration tiebreak, order-preserving remote pulls
-- [x] 179 passing tests (snapshot handler, sync engine edge cases, retry/backoff, playlist git, cross-platform, providers — Spotify and Deezer — TUI helpers)
+- [x] **TUI responsiveness** — Load/Clone/Sync/Search/Export/Cherry-pick run off the UI thread with a loading indicator instead of freezing the app; `playlist_git.diff()` is now wired into the TUI (`V`); SyncResultModal's pending-removal decision is per-song, not just "remove all"/"keep all"; one-level undo (`U`) for the last staged Add/Remove/Cherry-pick; a help screen (`?`); every dialog backs out with `Escape`; Cherry-pick's "Space to toggle" hint now actually works (`ListView` only bound Enter by default); first-run onboarding hint when no playlists are tracked yet
+- [x] 204 passing tests (snapshot handler, sync engine edge cases, retry/backoff, playlist git, cross-platform, providers — Spotify and Deezer — TUI, driven end-to-end with Textual's `Pilot`)
 
 ### Next steps
 
@@ -213,7 +219,6 @@ pytest
 - [ ] **Integration tests** — `tests/integration/` directory with `@pytest.mark.integration` tests that hit the real Spotify API using a fixed test playlist (skip unless credentials present)
 - [ ] **CLI interface** — expose `clone`, `sync`, `cherry-pick`, `export` as `syncZik clone <url>` subcommands for scripting and CI use
 - [ ] **Playlist history / log** — record each sync as a timestamped entry; show a `git log`-like view of when songs were added/removed and from which source
-- [ ] **Conflict per-song decision** — in SyncResultModal, let user decide per-song (keep/remove) instead of "remove all" vs "keep all"
 - [ ] **Apple Music provider** — using the MusicKit JS API or a music-manager bridge
 - [ ] **YouTube Music provider**
 - [ ] **Cloud backup** — optional encrypted remote storage of `state/` + `snapshots/` for multi-device use
