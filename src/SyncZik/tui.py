@@ -29,7 +29,16 @@ from textual.worker import WorkerFailed
 from .auth import get_deezer_client, get_spotify_client
 from .config import SPOTIFY_USER_ID
 from .cross_platform import ExportPlan, MatchKind, SongConflict, execute_export, plan_export
-from .playlist_git import PlaylistDiff, cherry_pick, diff, fork_from_user, songs_in_playlist
+from .playlist_git import (
+    LogEntry,
+    PlaylistDiff,
+    cherry_pick,
+    diff,
+    fork_from_user,
+    log,
+    revert,
+    songs_in_playlist,
+)
 from .providers.base import ServiceProvider
 from .providers.deezer import DeezerProvider
 from .providers.spotify import SpotifyProvider
@@ -41,7 +50,9 @@ from .sync_engine import (
     apply_remote_removal,
     clone,
     remove_song,
+    rename_playlist,
     sync,
+    untrack_playlist,
 )
 from .syncer import Playlist, Song
 
@@ -636,6 +647,9 @@ HELP_TEXT = """\
 [bold]E[/bold]  Export      — copy the playlist to another platform
 [bold]V[/bold]  Diff        — compare two tracked playlists song-by-song
 [bold]U[/bold]  Undo        — undo the last staged Add/Remove/Cherry-pick
+[bold]H[/bold]  History     — view past syncs/clones, revert to an earlier point
+[bold]R[/bold]  Rename      — rename the selected playlist locally
+[bold]X[/bold]  Untrack     — stop tracking the selected playlist locally (remote untouched)
 [bold]?[/bold]  Help        — this screen
 [bold]Q[/bold]  Quit
 
@@ -661,6 +675,94 @@ class HelpModal(ModalScreen[None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+# ---------------------------------------------------------------------------
+# Confirm (used by Untrack) and History (log + revert)
+# ---------------------------------------------------------------------------
+
+class ConfirmModal(ModalScreen[bool]):
+    """Generic Yes/Cancel confirmation dialog."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, title: str, message: str) -> None:
+        super().__init__()
+        self._title = title
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self._title, id="dialog-title")
+            yield Static(self._message, id="confirm-message")
+            with Horizontal(id="dialog-buttons"):
+                yield Button("Yes", variant="error", id="yes")
+                yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class HistoryModal(ModalScreen[bool]):
+    """Show a playlist's recorded clone/sync history and let the user revert to one.
+
+    Dismisses with True if a revert happened (so the caller can refresh the
+    song table), False otherwise.
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, playlist: Playlist, entries: list[LogEntry]) -> None:
+        super().__init__()
+        self._playlist = playlist
+        self._entries = entries
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f'History: "{self._playlist.name}"', id="dialog-title")
+            if not self._entries:
+                yield Static(
+                    "No recorded history yet — Clone or Sync to start one.", id="history-empty"
+                )
+            else:
+                yield ListView(id="history-list")
+            with Horizontal(id="dialog-buttons"):
+                if self._entries:
+                    yield Button("Revert to selected", variant="warning", id="revert")
+                yield Button("Close", variant="primary", id="close")
+
+    def on_mount(self) -> None:
+        if not self._entries:
+            return
+        lv = self.query_one("#history-list", ListView)
+        for entry in self._entries:
+            ts = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+            parts = []
+            if entry.added:
+                parts.append(f"+{len(entry.added)}")
+            if entry.removed:
+                parts.append(f"-{len(entry.removed)}")
+            change = " ".join(parts) if parts else "no change"
+            lv.append(ListItem(Label(f"{ts}  [{change}]  ({entry.total_songs} songs)")))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.dismiss(False)
+            return
+        if event.button.id == "revert":
+            lv = self.query_one("#history-list", ListView)
+            idx = lv.index
+            if idx is None or idx >= len(self._entries):
+                self.dismiss(False)
+                return
+            revert(self._playlist, self._entries[idx].timestamp)
+            self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 # ---------------------------------------------------------------------------
@@ -797,6 +899,21 @@ ModalScreen {
 #help-text {
     margin-top: 1;
 }
+
+#confirm-message {
+    margin-top: 1;
+}
+
+#history-list {
+    height: 10;
+    border: solid $panel;
+    margin-top: 1;
+}
+
+#history-empty {
+    margin-top: 1;
+    color: $text-muted;
+}
 """
 
 
@@ -814,6 +931,9 @@ class SyncZikApp(App):
         Binding("e", "export_playlist", "Export"),
         Binding("v", "diff_playlists", "Diff"),
         Binding("u", "undo", "Undo"),
+        Binding("h", "history", "History"),
+        Binding("r", "rename_playlist", "Rename"),
+        Binding("x", "untrack_playlist", "Untrack"),
         Binding("question_mark", "show_help", "Help", key_display="?"),
     ]
 
@@ -1215,6 +1335,62 @@ class SyncZikApp(App):
             self.notify(f"Undid: restored {len(songs)} removed song(s)")
         if self._selected is playlist:
             self._show_songs(playlist)
+
+    def action_history(self) -> None:
+        if self._selected is None:
+            self.notify("Select a playlist first.", severity="warning")
+            return
+        selected = self._selected
+        entries = log(selected.service, selected.service_id)
+
+        def on_result(reverted: bool) -> None:
+            if reverted and self._selected is selected:
+                self._show_songs(selected)
+                self.notify("Reverted local state to the selected point in history.")
+
+        self.push_screen(HistoryModal(selected, entries), on_result)
+
+    def action_rename_playlist(self) -> None:
+        if self._selected is None:
+            self.notify("Select a playlist first.", severity="warning")
+            return
+        selected = self._selected
+
+        def on_result(new_name: str | None) -> None:
+            if not new_name or self._selected is not selected:
+                return
+            rename_playlist(selected, new_name)
+            self._refresh_playlist_tree()
+            self.notify(f'Renamed to "{new_name}"')
+
+        self.push_screen(
+            InputModal("Rename playlist", f'New name for "{selected.name}"'), on_result
+        )
+
+    def action_untrack_playlist(self) -> None:
+        if self._selected is None:
+            self.notify("Select a playlist first.", severity="warning")
+            return
+        selected = self._selected
+
+        def on_result(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            untrack_playlist(selected)
+            if self._selected is selected:
+                self._selected = None
+                self.query_one("#song-table", DataTable).clear()
+            self._refresh_playlist_tree()
+            self.notify(f'Untracked "{selected.name}" locally (remote playlist untouched)')
+
+        self.push_screen(
+            ConfirmModal(
+                "Untrack playlist",
+                f'Stop tracking "{selected.name}" locally? This removes its local state '
+                "and history but does NOT delete it from the remote service.",
+            ),
+            on_result,
+        )
 
     def action_show_help(self) -> None:
         self.push_screen(HelpModal())
