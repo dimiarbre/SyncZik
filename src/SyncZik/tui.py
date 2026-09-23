@@ -39,6 +39,34 @@ from .syncer import Playlist, Song
 
 
 # ---------------------------------------------------------------------------
+# Provider helpers
+# ---------------------------------------------------------------------------
+
+def build_provider(choice: ServiceName) -> ServiceProvider:
+    """Connect to the chosen platform and wrap it as a ServiceProvider.
+
+    Raises RuntimeError (propagated from get_deezer_client) if Deezer is
+    chosen but DEEZER_ACCESS_TOKEN isn't configured.
+    """
+    if choice == "deezer":
+        return DeezerProvider(get_deezer_client())
+    return SpotifyProvider(get_spotify_client())
+
+
+def resolve_clone_user_id(provider: ServiceProvider) -> str | None:
+    """Return the user_id to pass to clone()/create_playlist for this provider.
+
+    Spotify's create_playlist requires an owning user_id; Deezer's ignores it
+    (the token's own account is implicit) so any placeholder is fine. Returns
+    None when a required SPOTIFY_USER_ID is missing, signaling the caller to
+    show an error instead of proceeding.
+    """
+    if provider.service_name == "spotify":
+        return SPOTIFY_USER_ID or None
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Modal screens
 # ---------------------------------------------------------------------------
 
@@ -68,12 +96,16 @@ class InputModal(ModalScreen[str | None]):
         self.dismiss(event.value.strip() or None)
 
 
-class PlatformPickerModal(ModalScreen[ServiceName | None]):
-    """Let the user pick a target platform for export."""
+class ProviderPickerModal(ModalScreen[ServiceName | None]):
+    """Let the user pick a platform — used both for export target and home provider."""
+
+    def __init__(self, title: str = "Export to which platform?") -> None:
+        super().__init__()
+        self._title = title
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label("Export to which platform?", id="dialog-title")
+            yield Label(self._title, id="dialog-title")
             with Horizontal(id="dialog-buttons"):
                 yield Button("Spotify", variant="primary", id="spotify")
                 yield Button("Deezer", id="deezer")
@@ -91,7 +123,7 @@ class PlatformPickerModal(ModalScreen[ServiceName | None]):
 class SearchModal(ModalScreen[Song | None]):
     """Search for a track and let the user pick one."""
 
-    def __init__(self, provider: SpotifyProvider) -> None:
+    def __init__(self, provider: ServiceProvider) -> None:
         super().__init__()
         self._provider = provider
         self._results: list[Song] = []
@@ -187,7 +219,7 @@ class SyncResultModal(ModalScreen[list[Song]]):
 class CherryPickModal(ModalScreen[list[Song]]):
     """Browse a remote playlist, show songs not in the target, let user pick."""
 
-    def __init__(self, provider: SpotifyProvider, target: Playlist) -> None:
+    def __init__(self, provider: ServiceProvider, target: Playlist) -> None:
         super().__init__()
         self._provider = provider
         self._target = target
@@ -496,7 +528,7 @@ class SyncZikApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self._provider: SpotifyProvider | None = None
+        self._provider: ServiceProvider | None = None
         self._playlists: list[Playlist] = []
         self._selected: Playlist | None = None
 
@@ -530,8 +562,17 @@ class SyncZikApp(App):
         tree = self.query_one("#playlist-tree", Tree)
         tree.root.expand()
 
-        self._provider = SpotifyProvider(get_spotify_client())
-        self._refresh_playlist_tree()
+        def on_choice(choice: ServiceName | None) -> None:
+            try:
+                self._provider = build_provider(choice or "spotify")
+            except RuntimeError as e:
+                self.notify(str(e), severity="error")
+                self._provider = build_provider("spotify")
+            self._refresh_playlist_tree()
+
+        self.push_screen(
+            ProviderPickerModal(title="Choose your home provider"), on_choice
+        )
 
     # ------------------------------------------------------------------
     # Playlist tree
@@ -553,7 +594,7 @@ class SyncZikApp(App):
                 children.append(p)
 
         for p in children:
-            parent_node = roots.get(p.parent_id)
+            parent_node = roots.get(p.parent_id) if p.parent_id is not None else None
             if parent_node:
                 parent_node.add_leaf(f"{p.name} [clone]", data=p)
             else:
@@ -617,7 +658,10 @@ class SyncZikApp(App):
             except Exception as e:
                 self.notify(f"Error: {e}", severity="error")
 
-        self.push_screen(InputModal("Load playlist", "Spotify playlist URL or ID"), on_result)
+        provider_label = "Deezer" if self._provider and self._provider.service_name == "deezer" else "Spotify"
+        self.push_screen(
+            InputModal("Load playlist", f"{provider_label} playlist URL or ID"), on_result
+        )
 
     def action_clone_playlist(self) -> None:
         if self._selected is None:
@@ -625,10 +669,10 @@ class SyncZikApp(App):
             return
 
         def on_result(name: str | None) -> None:
-            if not name or self._provider is None:
+            if not name or self._provider is None or self._selected is None:
                 return
-            user_id = SPOTIFY_USER_ID
-            if not user_id:
+            user_id = resolve_clone_user_id(self._provider)
+            if user_id is None:
                 self.notify("SPOTIFY_USER_ID not set in .env", severity="error")
                 return
             try:
@@ -669,7 +713,9 @@ class SyncZikApp(App):
             return
 
         def on_result(songs_to_remove: list[Song]) -> None:
-            if songs_to_remove and self._selected and self._provider:
+            if self._selected is None:
+                return
+            if songs_to_remove and self._provider:
                 apply_remote_removal(self._provider, self._selected, songs_to_remove)
             self._refresh_playlist_tree()
             self._show_songs(self._selected)
@@ -736,31 +782,26 @@ class SyncZikApp(App):
             return
         if self._provider is None:
             return
-
-        provider = self._provider
+        selected_name = self._selected.name
 
         def on_platform(platform: ServiceName | None) -> None:
             if platform is None:
                 return
 
-            target_provider: ServiceProvider
-            if platform == "spotify":
-                target_provider = provider
-                user_id = SPOTIFY_USER_ID
-                if not user_id:
-                    self.notify("SPOTIFY_USER_ID not set in .env", severity="error")
-                    return
-            else:
-                try:
-                    target_provider = DeezerProvider(get_deezer_client())
-                except RuntimeError as e:
-                    self.notify(str(e), severity="error")
-                    return
-                user_id = ""  # unused by DeezerProvider.create_playlist
+            try:
+                target_provider = build_provider(platform)
+            except RuntimeError as e:
+                self.notify(str(e), severity="error")
+                return
+            user_id = resolve_clone_user_id(target_provider)
+            if user_id is None:
+                self.notify("SPOTIFY_USER_ID not set in .env", severity="error")
+                return
 
             def on_name(export_name: str | None) -> None:
                 if not export_name or self._selected is None:
                     return
+                selected_name = self._selected.name
                 try:
                     export_plan = plan_export(self._selected.songs, target_provider)
                 except Exception as e:
@@ -772,7 +813,7 @@ class SyncZikApp(App):
                     songs = [t for _, t in export_plan.auto_resolved]
                     execute_export(
                         target_provider, user_id, export_name, songs,
-                        description=f"Exported from {self._selected.name} — managed by SyncZik",
+                        description=f"Exported from {selected_name} — managed by SyncZik",
                     )
                     self.notify(f'Exported "{export_name}" ({len(songs)} songs, no conflicts)')
                     return
@@ -781,7 +822,7 @@ class SyncZikApp(App):
                     try:
                         execute_export(
                             target_provider, user_id, export_name, resolved_songs,
-                            description=f"Exported from {self._selected.name} — managed by SyncZik",
+                            description=f"Exported from {selected_name} — managed by SyncZik",
                         )
                         skipped = export_plan.total() - len(resolved_songs)
                         self.notify(
@@ -794,11 +835,11 @@ class SyncZikApp(App):
                 self.push_screen(ExportConflictScreen(export_plan, target_provider), on_resolved)
 
             self.push_screen(
-                InputModal("Export playlist", f'Name for the export of "{self._selected.name}"'),
+                InputModal("Export playlist", f'Name for the export of "{selected_name}"'),
                 on_name,
             )
 
-        self.push_screen(PlatformPickerModal(), on_platform)
+        self.push_screen(ProviderPickerModal(), on_platform)
 
 
 def run() -> None:
