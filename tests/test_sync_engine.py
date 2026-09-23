@@ -296,3 +296,84 @@ class TestSyncEdgeCases:
         assert playlist.last_synced is None
         sync(provider, playlist)
         assert playlist.last_synced is not None
+
+
+# ---------------------------------------------------------------------------
+# sync() — order-preserving pulls, partial-failure resilience, fetch count
+# ---------------------------------------------------------------------------
+
+class TestSyncResilience:
+    def _setup(self, baseline, local, remote):
+        import SyncZik.snapshot_handler as sh
+        playlist = make_playlist(local)
+        sh.save_snapshot("spotify", playlist.service_id, baseline)
+        sh.save_playlist_state(playlist)
+        return playlist
+
+    def test_pulled_songs_preserve_remote_order(self):
+        a = make_song("A", "a")
+        new_songs = [make_song(x, x) for x in ["z", "m", "b"]]  # deliberately not sorted
+        remote = [a] + new_songs
+        playlist = self._setup(baseline=[a], local=[a], remote=remote)
+        provider = make_provider(remote)
+        provider.fetch_songs.return_value = list(remote)
+        result = sync(provider, playlist)
+        assert [s.id for s in result.added_from_remote] == ["z", "m", "b"]
+
+    def test_push_failure_recorded_in_errors_and_not_rebaselined(self):
+        a, b = make_song("A", "a"), make_song("B", "b")
+        playlist = self._setup(baseline=[a], local=[a, b], remote=[a])
+        provider = make_provider([a])
+        provider.fetch_songs.return_value = [a]
+        provider.add_songs.side_effect = RuntimeError("network error")
+
+        result = sync(provider, playlist)
+
+        assert result.errors
+        assert b not in result.pushed_to_remote
+        import SyncZik.snapshot_handler as sh
+        baseline_after = sh.load_snapshot("spotify", playlist.service_id)
+        assert {s.id for s in baseline_after} == {"a"}  # unchanged, b never confirmed
+
+    def test_remove_failure_recorded_in_errors_and_not_rebaselined(self):
+        a, b = make_song("A", "a"), make_song("B", "b")
+        playlist = self._setup(baseline=[a, b], local=[a], remote=[a, b])
+        provider = make_provider([a, b])
+        provider.fetch_songs.return_value = [a, b]
+        provider.remove_songs.side_effect = RuntimeError("network error")
+
+        result = sync(provider, playlist)
+
+        assert result.errors
+        assert b not in result.removed_from_remote
+        import SyncZik.snapshot_handler as sh
+        baseline_after = sh.load_snapshot("spotify", playlist.service_id)
+        assert {s.id for s in baseline_after} == {"a", "b"}  # unchanged, removal never confirmed
+
+    def test_is_clean_false_when_only_errors_present(self):
+        a, b = make_song("A", "a"), make_song("B", "b")
+        playlist = self._setup(baseline=[a], local=[a, b], remote=[a])
+        provider = make_provider([a])
+        provider.fetch_songs.return_value = [a]
+        provider.add_songs.side_effect = RuntimeError("network error")
+        result = sync(provider, playlist)
+        assert not result.is_clean()
+
+    def test_no_push_or_remove_only_fetches_remote_once(self):
+        # Pure pull, no local changes to push/remove: no need for the second
+        # post-push fetch — remote_songs from the first read is already the
+        # accurate new baseline.
+        a, b = make_song("A", "a"), make_song("B", "b")
+        playlist = self._setup(baseline=[a], local=[a], remote=[a, b])
+        provider = make_provider([a, b])
+        provider.fetch_songs.return_value = [a, b]
+        sync(provider, playlist)
+        assert provider.fetch_songs.call_count == 1
+
+    def test_push_triggers_second_fetch(self):
+        a, b = make_song("A", "a"), make_song("B", "b")
+        playlist = self._setup(baseline=[a], local=[a, b], remote=[a])
+        provider = make_provider([a])
+        provider.fetch_songs.side_effect = [[a], [a, b]]
+        sync(provider, playlist)
+        assert provider.fetch_songs.call_count == 2

@@ -1,6 +1,6 @@
 import spotipy
 
-from .base import ServiceProvider
+from .base import ServiceProvider, resilient_call
 from ..syncer import Artist, Playlist, Song
 from ..utils import ServiceName
 
@@ -18,6 +18,10 @@ def _parse_song(item: dict) -> Song:
         artists=_parse_artists(track["artists"]),
         uri=track["uri"],
         id=track["id"],
+        album=track.get("album", {}).get("name"),
+        duration_ms=track.get("duration_ms"),
+        isrc=track.get("external_ids", {}).get("isrc"),
+        added_at=item.get("added_at"),
     )
 
 
@@ -30,7 +34,7 @@ class SpotifyProvider(ServiceProvider):
         return "spotify"
 
     def get_playlist(self, playlist_id: str) -> Playlist:
-        raw = self._sp.playlist(playlist_id)
+        raw = resilient_call(lambda: self._sp.playlist(playlist_id))
         playlist = Playlist(
             service="spotify",
             service_id=playlist_id,
@@ -43,47 +47,52 @@ class SpotifyProvider(ServiceProvider):
                 if item["track"] is None:
                     continue
                 playlist.add_song(_parse_song(item), allow_duplicate=False)
-            tracks = self._sp.next(tracks) if tracks["next"] else None
+            tracks = resilient_call(lambda: self._sp.next(tracks)) if tracks["next"] else None
         return playlist
 
     def fetch_songs(self, playlist_id: str) -> list[Song]:
         songs: list[Song] = []
-        tracks = self._sp.playlist_tracks(playlist_id)
+        tracks = resilient_call(lambda: self._sp.playlist_tracks(playlist_id))
         while tracks:
             for item in tracks["items"]:
                 if item["track"] is None:
                     continue
                 songs.append(_parse_song(item))
-            tracks = self._sp.next(tracks) if tracks["next"] else None
+            tracks = resilient_call(lambda: self._sp.next(tracks)) if tracks["next"] else None
         return songs
 
     def search_tracks(self, query: str, limit: int = 10) -> list[Song]:
-        results = self._sp.search(q=query, type="track", limit=limit)
+        results = resilient_call(lambda: self._sp.search(q=query, type="track", limit=limit))
         return [
             Song(
                 name=item["name"],
                 artists=_parse_artists(item["artists"]),
                 uri=item["uri"],
                 id=item["id"],
+                album=item.get("album", {}).get("name"),
+                duration_ms=item.get("duration_ms"),
+                isrc=item.get("external_ids", {}).get("isrc"),
             )
             for item in results["tracks"]["items"]
         ]
 
     def create_playlist(self, user_id: str, name: str, description: str = "") -> str:
-        result = self._sp.user_playlist_create(
+        result = resilient_call(lambda: self._sp.user_playlist_create(
             user=user_id,
             name=name,
             public=True,
             description=description,
-        )
+        ))
         return result["id"]
 
     def add_songs(self, playlist_id: str, songs: list[Song]) -> None:
         uris = [s.uri for s in songs]
         for i in range(0, len(uris), _BATCH_SIZE):
-            self._sp.playlist_add_items(playlist_id, uris[i:i + _BATCH_SIZE])
+            batch = uris[i:i + _BATCH_SIZE]
+            resilient_call(lambda: self._sp.playlist_add_items(playlist_id, batch))
 
     def remove_songs(self, playlist_id: str, songs: list[Song]) -> None:
         uris = [s.uri for s in songs]
         for i in range(0, len(uris), _BATCH_SIZE):
-            self._sp.playlist_remove_all_occurrences_of_items(playlist_id, uris[i:i + _BATCH_SIZE])
+            batch = uris[i:i + _BATCH_SIZE]
+            resilient_call(lambda: self._sp.playlist_remove_all_occurrences_of_items(playlist_id, batch))

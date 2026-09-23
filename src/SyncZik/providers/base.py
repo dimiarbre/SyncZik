@@ -1,7 +1,12 @@
 from abc import ABC, abstractmethod
+from typing import Callable, TypeVar
 
+from ..exceptions import translate_provider_error
+from ..retry import with_retry
 from ..syncer import Playlist, Song
 from ..utils import ServiceName
+
+T = TypeVar("T")
 
 
 class ServiceProvider(ABC):
@@ -40,3 +45,19 @@ class ServiceProvider(ABC):
     def remove_songs(self, playlist_id: str, songs: list[Song]) -> None:
         """Remove songs from an existing playlist."""
         ...
+
+
+def resilient_call(fn: Callable[[], T], *, max_attempts: int = 3, base_delay: float = 1.0) -> T:
+    """Retry a provider API call on transient failure, then translate any error.
+
+    Shared by SpotifyProvider/DeezerProvider so every outbound call gets the
+    same retry/backoff behavior and raises a SyncZikError instead of a raw
+    spotipy/deezer exception.
+    """
+    try:
+        return with_retry(fn, max_attempts=max_attempts, base_delay=base_delay)
+    except Exception as exc:
+        wrapped = translate_provider_error(exc)
+        if wrapped is not None:
+            raise wrapped from exc
+        raise

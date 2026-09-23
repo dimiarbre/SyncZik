@@ -27,6 +27,40 @@ class TestSong:
         assert len({s1, s2}) == 1
 
 
+class TestSongMetadata:
+    def test_new_fields_default_to_none(self):
+        s = make_song()
+        assert s.album is None
+        assert s.duration_ms is None
+        assert s.isrc is None
+        assert s.added_at is None
+
+    def test_roundtrip_with_metadata(self):
+        s = Song(
+            name="A", artists=[Artist("Art", "a1")], uri="u", id="i",
+            album="Album", duration_ms=123456, isrc="US123", added_at="2024-01-01T00:00:00Z",
+        )
+        loaded = Song.from_dict(s.to_dict())
+        assert loaded.album == "Album"
+        assert loaded.duration_ms == 123456
+        assert loaded.isrc == "US123"
+        assert loaded.added_at == "2024-01-01T00:00:00Z"
+
+    def test_from_dict_without_metadata_keys_defaults_to_none(self):
+        # Simulates loading a state/snapshot file saved before these fields existed.
+        old_dict = {"name": "A", "artists": [{"name": "Art", "id": "a1"}], "uri": "u", "id": "i"}
+        loaded = Song.from_dict(old_dict)
+        assert loaded.album is None
+        assert loaded.duration_ms is None
+        assert loaded.isrc is None
+        assert loaded.added_at is None
+
+    def test_metadata_does_not_affect_equality(self):
+        a = make_song()
+        b = Song(name=a.name, artists=a.artists, uri=a.uri, id=a.id, isrc="different")
+        assert a == b
+
+
 class TestArtist:
     def test_equality_by_id(self):
         assert Artist("Daft Punk", "dp") == Artist("Daft Punk", "dp")

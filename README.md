@@ -170,6 +170,10 @@ Source playlist songs
 | `snapshots/{service}/{id}.json` | Baseline snapshot (merge base) |
 | `.spotify_cache` | Cached OAuth token |
 
+State and snapshot files are written atomically (temp file + rename), so a crash or interrupted process mid-save can't leave a corrupted file behind.
+
+Outbound Spotify/Deezer API calls are retried with exponential backoff on rate limits (429) and transient server/network errors; a failure that persists through retries is surfaced as a `SyncZikError` subclass (`ProviderAuthError`, `ProviderRateLimitError`, `ProviderNotFoundError`) with an actionable message instead of a raw library exception. A sync that fails partway through a push/removal reports it in the result rather than silently marking the playlist as up to date.
+
 ## Tests
 
 ```bash
@@ -177,7 +181,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-124 tests covering models, sync merge logic, snapshot handler, playlist git operations, cross-platform export logic, provider implementations, and TUI provider-selection helpers. All tests are fully mocked — no real API calls required. CI runs `pytest` and `mypy` on every push/PR (see `.github/workflows/ci.yml`).
+179 tests covering models, sync merge logic (including partial-failure and order-preservation edge cases), snapshot handler (including atomic-write failure), retry/backoff behavior, provider implementations for both Spotify and Deezer (including error translation), playlist git operations, cross-platform export logic (including ISRC and duration-tiebreak matching), and TUI provider-selection helpers. All tests are fully mocked — no real API calls required. CI runs `pytest` and `mypy` on every push/PR (see `.github/workflows/ci.yml`).
 
 ---
 
@@ -200,11 +204,12 @@ pytest
 - [x] **Deezer write support** — `DeezerProvider.create_playlist`/`add_songs`/`remove_songs` via deezer-python; TUI export flow can now target Deezer
 - [x] **Deezer as home provider** — choose Spotify or Deezer at TUI startup; Load/Clone/Sync/Search all work against whichever is active
 - [x] CI (`pytest` + `mypy`) on every push/PR; MIT license
-- [x] 124 passing tests (snapshot handler, sync engine edge cases, playlist git, cross-platform, providers, TUI helpers)
+- [x] **Reliability foundation** — retry/backoff with `Retry-After` support on rate limits and transient errors, `SyncZikError` translation at the provider boundary, atomic state/snapshot writes, partial-sync-failure reporting, ISRC-first cross-platform matching with a duration tiebreak, order-preserving remote pulls
+- [x] 179 passing tests (snapshot handler, sync engine edge cases, retry/backoff, playlist git, cross-platform, providers — Spotify and Deezer — TUI helpers)
 
 ### Next steps
 
-- [ ] **Song matching quality** — improve `_normalize()` with transliteration (accented chars), edit-distance fallback for very similar titles
+- [ ] **Song matching quality** — ISRC and duration-tiebreak matching are in; still open: transliteration (accented chars), edit-distance fallback for very similar titles, and stripping remix/live/deluxe noise from titles without risking false matches
 - [ ] **Integration tests** — `tests/integration/` directory with `@pytest.mark.integration` tests that hit the real Spotify API using a fixed test playlist (skip unless credentials present)
 - [ ] **CLI interface** — expose `clone`, `sync`, `cherry-pick`, `export` as `syncZik clone <url>` subcommands for scripting and CI use
 - [ ] **Playlist history / log** — record each sync as a timestamped entry; show a `git log`-like view of when songs were added/removed and from which source
