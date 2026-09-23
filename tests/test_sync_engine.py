@@ -9,7 +9,9 @@ from SyncZik.sync_engine import (
     apply_remote_removal,
     clone,
     remove_song,
+    rename_playlist,
     sync,
+    untrack_playlist,
 )
 from SyncZik.providers.base import ServiceProvider
 from SyncZik.utils import ServiceName
@@ -79,7 +81,7 @@ class TestClone:
         provider = make_provider(songs, new_playlist_id="new123")
         clone(provider, "user", "source_id", "Clone")
         assert Path("state/spotify/new123.json").exists()
-        assert Path("snapshots/spotify/new123.json").exists()
+        assert list(Path("snapshots/spotify/new123").glob("*.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -377,3 +379,38 @@ class TestSyncResilience:
         provider.fetch_songs.side_effect = [[a], [a, b]]
         sync(provider, playlist)
         assert provider.fetch_songs.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# rename_playlist / untrack_playlist
+# ---------------------------------------------------------------------------
+
+class TestRenamePlaylist:
+    def test_renames_and_persists(self):
+        p = make_playlist([make_song()])
+        rename_playlist(p, "New Name")
+        assert p.name == "New Name"
+        import SyncZik.snapshot_handler as sh
+        loaded = sh.load_playlist_state("spotify", p.service_id)
+        assert loaded.name == "New Name"
+
+
+class TestUntrackPlaylist:
+    def test_removes_local_state(self):
+        import SyncZik.snapshot_handler as sh
+        p = make_playlist([make_song()])
+        sh.save_playlist_state(p)
+        untrack_playlist(p)
+        assert sh.load_playlist_state("spotify", p.service_id) is None
+
+    def test_removes_snapshot_history(self):
+        import SyncZik.snapshot_handler as sh
+        p = make_playlist([make_song()])
+        sh.save_snapshot("spotify", p.service_id, p.songs)
+        untrack_playlist(p)
+        assert sh.list_snapshot_versions("spotify", p.service_id) == []
+
+    def test_does_not_call_remote_provider(self):
+        # untrack_playlist is local-only: it must never touch a provider.
+        p = make_playlist([make_song()])
+        untrack_playlist(p)  # would raise/error if it tried to use a provider argument

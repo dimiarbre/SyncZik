@@ -102,6 +102,9 @@ On first launch you're asked to choose your home provider (Spotify or Deezer). C
 | `E`             | **Export** — export to another platform; conflicts resolved song-by-song in a GUI dialog |
 | `V`             | **Diff** — compare the selected playlist against another tracked one, song-by-song |
 | `U`             | **Undo** — undo the last staged Add/Remove/Cherry-pick |
+| `H`             | **History** — view past syncs/clones for the selected playlist, revert to an earlier point |
+| `R`             | **Rename** — rename the selected playlist locally |
+| `X`             | **Untrack** — stop tracking the selected playlist locally (does not touch the remote) |
 | `?`             | **Help** — keybinding and workflow reference |
 | `Q`             | Quit |
 
@@ -172,8 +175,10 @@ Source playlist songs
 | Path | Contents |
 |------|----------|
 | `state/{service}/{id}.json` | Local playlist state (working tree) |
-| `snapshots/{service}/{id}.json` | Baseline snapshot (merge base) |
+| `snapshots/{service}/{id}/{timestamp}.json` | Versioned baseline snapshots — one per Clone/Sync, oldest to newest |
 | `.spotify_cache` | Cached OAuth token |
+
+Every Clone/Sync records a new snapshot version instead of overwriting the last one, so the `H` (History) screen can show a `git log`-style view of what changed at each point and revert local state to any of them (local-only — the remote is untouched until you Sync again). Installs from before this existed keep working: a legacy flat `snapshots/{service}/{id}.json` file is still read as a fallback until the next save.
 
 State and snapshot files are written atomically (temp file + rename), so a crash or interrupted process mid-save can't leave a corrupted file behind.
 
@@ -186,7 +191,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-204 tests covering models, sync merge logic (including partial-failure and order-preservation edge cases), snapshot handler (including atomic-write failure), retry/backoff behavior, provider implementations for both Spotify and Deezer (including error translation), playlist git operations, cross-platform export logic (including ISRC and duration-tiebreak matching), and the TUI (provider selection, the async worker helper behind non-blocking network calls, undo, diff, per-song sync conflict resolution, cherry-pick's toggle fix, and escape-to-cancel), driven end-to-end with Textual's `Pilot`/`run_test()`. All tests are fully mocked — no real API calls required. CI runs `pytest` and `mypy` on every push/PR (see `.github/workflows/ci.yml`).
+233 tests covering models, sync merge logic (including partial-failure and order-preservation edge cases), versioned snapshot history and legacy-format fallback, retry/backoff behavior, provider implementations for both Spotify and Deezer (including error translation), playlist git operations (including `log`/`revert`), cross-platform export logic (including ISRC and duration-tiebreak matching), and the TUI (provider selection, the async worker helper behind non-blocking network calls, undo, diff, per-song sync conflict resolution, cherry-pick's toggle fix, escape-to-cancel, history/revert, and rename/untrack), driven end-to-end with Textual's `Pilot`/`run_test()`. All tests are fully mocked — no real API calls required. CI runs `pytest` and `mypy` on every push/PR (see `.github/workflows/ci.yml`).
 
 ---
 
@@ -211,14 +216,16 @@ pytest
 - [x] CI (`pytest` + `mypy`) on every push/PR; MIT license
 - [x] **Reliability foundation** — retry/backoff with `Retry-After` support on rate limits and transient errors, `SyncZikError` translation at the provider boundary, atomic state/snapshot writes, partial-sync-failure reporting, ISRC-first cross-platform matching with a duration tiebreak, order-preserving remote pulls
 - [x] **TUI responsiveness** — Load/Clone/Sync/Search/Export/Cherry-pick run off the UI thread with a loading indicator instead of freezing the app; `playlist_git.diff()` is now wired into the TUI (`V`); SyncResultModal's pending-removal decision is per-song, not just "remove all"/"keep all"; one-level undo (`U`) for the last staged Add/Remove/Cherry-pick; a help screen (`?`); every dialog backs out with `Escape`; Cherry-pick's "Space to toggle" hint now actually works (`ListView` only bound Enter by default); first-run onboarding hint when no playlists are tracked yet
-- [x] 204 passing tests (snapshot handler, sync engine edge cases, retry/backoff, playlist git, cross-platform, providers — Spotify and Deezer — TUI, driven end-to-end with Textual's `Pilot`)
+- [x] **Playlist history** — every Clone/Sync now records a versioned snapshot; `playlist_git.log()`/`revert()` and a TUI History screen (`H`) show what changed at each point and can revert local state to any of them; local `Rename` (`R`) and `Untrack` (`X`, with confirmation) for tracked playlists
+- [x] 233 passing tests (snapshot versioning/history, sync engine edge cases, retry/backoff, playlist git including log/revert, cross-platform, providers — Spotify and Deezer — TUI, driven end-to-end with Textual's `Pilot`)
 
 ### Next steps
 
 - [ ] **Song matching quality** — ISRC and duration-tiebreak matching are in; still open: transliteration (accented chars), edit-distance fallback for very similar titles, and stripping remix/live/deluxe noise from titles without risking false matches
 - [ ] **Integration tests** — `tests/integration/` directory with `@pytest.mark.integration` tests that hit the real Spotify API using a fixed test playlist (skip unless credentials present)
 - [ ] **CLI interface** — expose `clone`, `sync`, `cherry-pick`, `export` as `syncZik clone <url>` subcommands for scripting and CI use
-- [ ] **Playlist history / log** — record each sync as a timestamped entry; show a `git log`-like view of when songs were added/removed and from which source
+- [ ] **Duplicate-song support** — a playlist containing the same track twice can't be represented today (dedup by ID throughout `Playlist.add_song`/`sync_engine`/both providers); a real structural change, deliberately deferred rather than bundled into playlist history
+- [ ] **Full reorder-detection** — sync() now preserves order when *pulling* new songs, but a pure reorder on the remote (no add/remove) is still invisible to the diff
 - [ ] **Apple Music provider** — using the MusicKit JS API or a music-manager bridge
 - [ ] **YouTube Music provider**
 - [ ] **Cloud backup** — optional encrypted remote storage of `state/` + `snapshots/` for multi-device use

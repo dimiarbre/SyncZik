@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 from textual.widgets import Input
 
+import SyncZik.snapshot_handler as sh
 import SyncZik.tui as tui
 from SyncZik.providers.base import ServiceProvider
 from SyncZik.providers.deezer import DeezerProvider
@@ -490,5 +491,183 @@ class TestFirstRunHint:
                 tree = app.query_one("#playlist-tree", Tree)
                 labels = [str(child.label) for child in tree.root.children]
                 assert any("press L to load" in label for label in labels)
+
+        asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# action_history / HistoryModal — log + revert wired into the TUI
+# ---------------------------------------------------------------------------
+
+class TestActionHistory:
+    def test_warns_when_nothing_selected(self, monkeypatch):
+        async def scenario():
+            app = tui.SyncZikApp()
+            async with app.run_test() as pilot:
+                await _boot(monkeypatch, pilot)
+                notify = MagicMock()
+                monkeypatch.setattr(app, "notify", notify)
+                app.action_history()
+                notify.assert_called_once()
+
+        asyncio.run(scenario())
+
+    def test_pushes_history_modal_with_no_entries_message(self, monkeypatch):
+        async def scenario():
+            app = tui.SyncZikApp()
+            async with app.run_test() as pilot:
+                await _boot(monkeypatch, pilot)
+                playlist = Playlist(service="spotify", service_id="pl1", name="P", owner="u")
+                app._selected = playlist
+                app.action_history()
+                await pilot.pause()
+                modal = app.screen
+                assert isinstance(modal, tui.HistoryModal)
+                assert modal._entries == []
+
+        asyncio.run(scenario())
+
+    def test_revert_restores_local_state_and_dismisses_true(self, monkeypatch):
+        async def scenario():
+            app = tui.SyncZikApp()
+            async with app.run_test() as pilot:
+                await _boot(monkeypatch, pilot)
+                a, b = make_song("A", "a"), make_song("B", "b")
+                sh.save_snapshot("spotify", "pl1", [a])
+                sh.save_snapshot("spotify", "pl1", [a, b])
+                playlist = Playlist(service="spotify", service_id="pl1", name="P", owner="u")
+                playlist.songs = [a, b]
+                sh.save_playlist_state(playlist)
+                app._selected = playlist
+
+                dismissed = []
+                entries = tui.log("spotify", "pl1")
+                app.push_screen(tui.HistoryModal(playlist, entries), dismissed.append)
+                await pilot.pause()
+
+                lv = app.screen.query_one("#history-list")
+                lv.index = 1  # the older, single-song version
+                await pilot.click("#revert")
+                await pilot.pause()
+
+                assert dismissed == [True]
+                assert {s.id for s in playlist.songs} == {"a"}
+
+        asyncio.run(scenario())
+
+    def test_close_dismisses_false_without_reverting(self, monkeypatch):
+        async def scenario():
+            app = tui.SyncZikApp()
+            async with app.run_test() as pilot:
+                await _boot(monkeypatch, pilot)
+                a = make_song("A", "a")
+                sh.save_snapshot("spotify", "pl1", [a])
+                playlist = Playlist(service="spotify", service_id="pl1", name="P", owner="u")
+                playlist.songs = [a]
+
+                dismissed = []
+                entries = tui.log("spotify", "pl1")
+                app.push_screen(tui.HistoryModal(playlist, entries), dismissed.append)
+                await pilot.pause()
+                await pilot.click("#close")
+                await pilot.pause()
+
+                assert dismissed == [False]
+
+        asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# action_rename_playlist
+# ---------------------------------------------------------------------------
+
+class TestActionRenamePlaylist:
+    def test_warns_when_nothing_selected(self, monkeypatch):
+        async def scenario():
+            app = tui.SyncZikApp()
+            async with app.run_test() as pilot:
+                await _boot(monkeypatch, pilot)
+                notify = MagicMock()
+                monkeypatch.setattr(app, "notify", notify)
+                app.action_rename_playlist()
+                notify.assert_called_once()
+
+        asyncio.run(scenario())
+
+    def test_renames_and_persists(self, monkeypatch):
+        async def scenario():
+            app = tui.SyncZikApp()
+            async with app.run_test() as pilot:
+                await _boot(monkeypatch, pilot)
+                playlist = Playlist(service="spotify", service_id="pl1", name="Old Name", owner="u")
+                sh.save_playlist_state(playlist)
+                app._selected = playlist
+
+                app.action_rename_playlist()
+                await pilot.pause()
+                input_widget = app.screen.query_one("#dialog-input", Input)
+                input_widget.value = "New Name"
+                await pilot.press("enter")
+                await pilot.pause()
+
+                assert playlist.name == "New Name"
+                loaded = sh.load_playlist_state("spotify", "pl1")
+                assert loaded.name == "New Name"
+
+        asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# action_untrack_playlist / ConfirmModal
+# ---------------------------------------------------------------------------
+
+class TestActionUntrackPlaylist:
+    def test_warns_when_nothing_selected(self, monkeypatch):
+        async def scenario():
+            app = tui.SyncZikApp()
+            async with app.run_test() as pilot:
+                await _boot(monkeypatch, pilot)
+                notify = MagicMock()
+                monkeypatch.setattr(app, "notify", notify)
+                app.action_untrack_playlist()
+                notify.assert_called_once()
+
+        asyncio.run(scenario())
+
+    def test_cancel_leaves_playlist_tracked(self, monkeypatch):
+        async def scenario():
+            app = tui.SyncZikApp()
+            async with app.run_test() as pilot:
+                await _boot(monkeypatch, pilot)
+                playlist = Playlist(service="spotify", service_id="pl1", name="P", owner="u")
+                sh.save_playlist_state(playlist)
+                app._selected = playlist
+
+                app.action_untrack_playlist()
+                await pilot.pause()
+                await pilot.click("#cancel")
+                await pilot.pause()
+
+                assert sh.load_playlist_state("spotify", "pl1") is not None
+                assert app._selected is playlist
+
+        asyncio.run(scenario())
+
+    def test_confirm_untracks_and_clears_selection(self, monkeypatch):
+        async def scenario():
+            app = tui.SyncZikApp()
+            async with app.run_test() as pilot:
+                await _boot(monkeypatch, pilot)
+                playlist = Playlist(service="spotify", service_id="pl1", name="P", owner="u")
+                sh.save_playlist_state(playlist)
+                app._selected = playlist
+
+                app.action_untrack_playlist()
+                await pilot.pause()
+                await pilot.click("#yes")
+                await pilot.pause()
+
+                assert sh.load_playlist_state("spotify", "pl1") is None
+                assert app._selected is None
 
         asyncio.run(scenario())

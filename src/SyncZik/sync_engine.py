@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from .providers.base import ServiceProvider
 from .snapshot_handler import (
+    delete_playlist,
     list_playlists,
     load_snapshot,
     load_playlist_state,
@@ -189,3 +190,15 @@ def remove_song(playlist: Playlist, song: Song) -> bool:
     if removed:
         save_playlist_state(playlist)
     return removed
+
+
+def rename_playlist(playlist: Playlist, new_name: str) -> None:
+    """Rename a playlist locally. Does not rename it on the remote."""
+    playlist.name = new_name
+    save_playlist_state(playlist)
+
+
+def untrack_playlist(playlist: Playlist) -> None:
+    """Stop tracking a playlist locally: removes its local state and snapshot
+    history. Does not delete or modify the playlist on the remote."""
+    delete_playlist(playlist.service, playlist.service_id)

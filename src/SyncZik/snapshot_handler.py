@@ -1,10 +1,17 @@
+from __future__ import annotations
+
 import json
 import os
+import shutil
 import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from .syncer import Playlist, Song
+
+_TIMESTAMP_FMT = "%Y%m%dT%H%M%S%f"
 
 
 def _atomic_write_json(path: Path, data: object) -> None:
@@ -24,26 +31,71 @@ def _atomic_write_json(path: Path, data: object) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Raw API snapshots (merge base)
+# Raw API snapshots (merge base) — versioned history
+#
+# Each save_snapshot() call appends a new timestamped file under
+# snapshots/{service}/{id}/ rather than overwriting a single file, so
+# playlist_git.log()/revert() can look back through past sync/clone points.
+# load_snapshot() always reads the latest version, falling back to the old
+# pre-history flat-file layout for installs that predate this.
 # ---------------------------------------------------------------------------
 
-def _snapshot_path(service: str, playlist_id: str) -> Path:
-    p = Path("snapshots") / service
+@dataclass
+class SnapshotVersion:
+    """One recorded snapshot of a playlist's songs at a point in time."""
+    timestamp: datetime
+    songs: list[Song]
+
+
+def _snapshot_version_dir(service: str, playlist_id: str) -> Path:
+    p = Path("snapshots") / service / playlist_id
     p.mkdir(parents=True, exist_ok=True)
-    return p / f"{playlist_id}.json"
+    return p
+
+
+def _legacy_snapshot_path(service: str, playlist_id: str) -> Path:
+    return Path("snapshots") / service / f"{playlist_id}.json"
 
 
 def save_snapshot(service: str, playlist_id: str, songs: list[Song]) -> None:
-    path = _snapshot_path(service, playlist_id)
-    _atomic_write_json(path, [s.to_dict() for s in songs])
+    version_dir = _snapshot_version_dir(service, playlist_id)
+    timestamp = datetime.now(tz=timezone.utc).strftime(_TIMESTAMP_FMT)
+    _atomic_write_json(version_dir / f"{timestamp}.json", [s.to_dict() for s in songs])
+
+
+def _latest_version_file(service: str, playlist_id: str) -> Optional[Path]:
+    version_dir = Path("snapshots") / service / playlist_id
+    if not version_dir.exists():
+        return None
+    files = sorted(version_dir.glob("*.json"))
+    return files[-1] if files else None
 
 
 def load_snapshot(service: str, playlist_id: str) -> list[Song]:
-    path = _snapshot_path(service, playlist_id)
-    if not path.exists():
+    latest = _latest_version_file(service, playlist_id)
+    if latest is not None:
+        with open(latest, "r", encoding="utf-8") as f:
+            return [Song.from_dict(d) for d in json.load(f)]
+
+    legacy = _legacy_snapshot_path(service, playlist_id)
+    if legacy.exists():
+        with open(legacy, "r", encoding="utf-8") as f:
+            return [Song.from_dict(d) for d in json.load(f)]
+    return []
+
+
+def list_snapshot_versions(service: str, playlist_id: str) -> list[SnapshotVersion]:
+    """Return every recorded snapshot version for a playlist, newest first."""
+    version_dir = Path("snapshots") / service / playlist_id
+    if not version_dir.exists():
         return []
-    with open(path, "r", encoding="utf-8") as f:
-        return [Song.from_dict(d) for d in json.load(f)]
+    versions = []
+    for f in sorted(version_dir.glob("*.json"), reverse=True):
+        timestamp = datetime.strptime(f.stem, _TIMESTAMP_FMT).replace(tzinfo=timezone.utc)
+        with open(f, "r", encoding="utf-8") as fh:
+            songs = [Song.from_dict(d) for d in json.load(fh)]
+        versions.append(SnapshotVersion(timestamp=timestamp, songs=songs))
+    return versions
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +119,24 @@ def load_playlist_state(service: str, playlist_id: str) -> Optional[Playlist]:
         return None
     with open(path, "r", encoding="utf-8") as f:
         return Playlist.from_dict(json.load(f))
+
+
+def delete_playlist(service: str, playlist_id: str) -> None:
+    """Untrack a playlist locally: remove its working-tree state and snapshot history.
+
+    Does not touch the playlist on the remote service.
+    """
+    state_path = _state_path(service, playlist_id)
+    if state_path.exists():
+        state_path.unlink()
+
+    legacy_snapshot = _legacy_snapshot_path(service, playlist_id)
+    if legacy_snapshot.exists():
+        legacy_snapshot.unlink()
+
+    version_dir = Path("snapshots") / service / playlist_id
+    if version_dir.exists():
+        shutil.rmtree(version_dir)
 
 
 def list_playlists() -> list[Playlist]:
