@@ -39,6 +39,7 @@ def make_provider(search_results: list[Song], new_id: str = "new_pl") -> Service
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNCZIK_DATA_DIR", str(tmp_path / "xdg_data"))
 
 
 # ---------------------------------------------------------------------------

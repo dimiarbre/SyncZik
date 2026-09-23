@@ -16,6 +16,7 @@ from SyncZik.syncer import Artist, Playlist, Song
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNCZIK_DATA_DIR", str(tmp_path / "xdg_data"))
 
 
 def make_song(name="Track", id="id1") -> Song:

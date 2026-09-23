@@ -1413,7 +1413,9 @@ class SyncZikApp(App):
 
 def run() -> None:
     from .logging_setup import setup_logging
+    from .snapshot_handler import migrate_legacy_storage
     setup_logging()  # no-op if the CLI entry point already set this up
+    migrate_legacy_storage()  # likewise, in case the TUI is launched directly
     SyncZikApp().run()
 
 

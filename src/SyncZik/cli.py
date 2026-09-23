@@ -19,7 +19,7 @@ from .playlist_git import cherry_pick, songs_in_playlist
 from .providers.base import ServiceProvider
 from .providers.deezer import DeezerProvider
 from .providers.spotify import SpotifyProvider
-from .snapshot_handler import list_playlists
+from .snapshot_handler import list_playlists, migrate_legacy_storage
 from .sync_engine import clone as clone_playlist
 from .sync_engine import sync as sync_playlist
 from .syncer import Playlist
@@ -206,6 +206,12 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> Optional[int]:
     """
     args = build_parser().parse_args(argv)
     setup_logging(verbose=args.verbose)
+    if migrate_legacy_storage():
+        print(
+            "Migrated state/ and snapshots/ from the current directory into "
+            "the new data directory (the originals were left in place).",
+            file=sys.stderr,
+        )
     if not getattr(args, "command", None):
         return None
     try:

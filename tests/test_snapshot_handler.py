@@ -7,6 +7,7 @@ import SyncZik.snapshot_handler as sh
 from SyncZik.snapshot_handler import (
     delete_playlist,
     list_snapshot_versions,
+    migrate_legacy_storage,
     save_snapshot,
     load_snapshot,
     save_playlist_state,
@@ -29,6 +30,7 @@ def make_playlist(service="spotify", service_id="pl1", songs=None) -> Playlist:
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNCZIK_DATA_DIR", str(tmp_path / "xdg_data"))
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +54,7 @@ class TestSnapshotRoundTrip:
 
     def test_creates_directory_if_missing(self):
         save_snapshot("deezer", "pl2", [make_song()])
-        assert list(Path("snapshots/deezer/pl2").glob("*.json"))
+        assert list((sh._data_dir() / "snapshots/deezer/pl2").glob("*.json"))
 
     def test_overwrites_existing(self):
         save_snapshot("spotify", "pl1", [make_song("Old", "old")])
@@ -119,9 +121,11 @@ class TestSnapshotVersioning:
         assert list_snapshot_versions("spotify", "nonexistent") == []
 
     def test_load_snapshot_falls_back_to_legacy_flat_file(self):
-        # Simulates a pre-history install: a flat snapshots/{service}/{id}.json
-        # file with no versioned directory yet.
-        legacy_dir = Path("snapshots/spotify")
+        # Simulates an install from before snapshot versioning existed: a
+        # flat snapshots/{service}/{id}.json file with no versioned
+        # directory, already at the current data dir (i.e. after any
+        # CWD -> data-dir migration has already happened).
+        legacy_dir = sh._data_dir() / "snapshots" / "spotify"
         legacy_dir.mkdir(parents=True)
         (legacy_dir / "pl1.json").write_text(json.dumps([make_song("Legacy", "legacy").to_dict()]))
         loaded = load_snapshot("spotify", "pl1")
@@ -129,12 +133,87 @@ class TestSnapshotVersioning:
         assert loaded[0].id == "legacy"
 
     def test_new_save_takes_precedence_over_legacy_file(self):
-        legacy_dir = Path("snapshots/spotify")
+        legacy_dir = sh._data_dir() / "snapshots" / "spotify"
         legacy_dir.mkdir(parents=True)
         (legacy_dir / "pl1.json").write_text(json.dumps([make_song("Legacy", "legacy").to_dict()]))
         save_snapshot("spotify", "pl1", [make_song("New", "new")])
         loaded = load_snapshot("spotify", "pl1")
         assert loaded[0].id == "new"
+
+
+# ---------------------------------------------------------------------------
+# _data_dir() / migrate_legacy_storage() — CWD-relative -> XDG data dir
+# ---------------------------------------------------------------------------
+
+class TestDataDir:
+    def test_respects_synczik_data_dir_env_var(self, tmp_path):
+        assert sh._data_dir() == tmp_path / "xdg_data"
+
+    def test_falls_back_to_platformdirs_when_unset(self, monkeypatch):
+        monkeypatch.delenv("SYNCZIK_DATA_DIR", raising=False)
+        path = sh._data_dir()
+        assert "SyncZik" in str(path)
+
+
+class TestMigrateLegacyStorage:
+    def test_copies_legacy_state_and_snapshots(self, tmp_path):
+        Path("state/spotify").mkdir(parents=True)
+        Path("state/spotify/pl1.json").write_text("{}")
+        Path("snapshots/spotify/pl1").mkdir(parents=True)
+        Path("snapshots/spotify/pl1/20240101T000000000000.json").write_text("[]")
+
+        migrated = migrate_legacy_storage()
+
+        assert migrated is True
+        new_state = sh._data_dir() / "state" / "spotify" / "pl1.json"
+        new_snapshot = sh._data_dir() / "snapshots" / "spotify" / "pl1" / "20240101T000000000000.json"
+        assert new_state.exists()
+        assert new_snapshot.exists()
+
+    def test_does_not_delete_legacy_files(self):
+        Path("state/spotify").mkdir(parents=True)
+        Path("state/spotify/pl1.json").write_text("{}")
+
+        migrate_legacy_storage()
+
+        assert Path("state/spotify/pl1.json").exists()
+
+    def test_does_not_overwrite_existing_new_location(self):
+        Path("state/spotify").mkdir(parents=True)
+        Path("state/spotify/pl1.json").write_text('{"name": "legacy"}')
+
+        new_state_dir = sh._data_dir() / "state"
+        new_state_dir.mkdir(parents=True)
+        (new_state_dir / "already_here.json").write_text('{"name": "fresh"}')
+
+        migrated = migrate_legacy_storage()
+
+        assert migrated is False
+        assert (new_state_dir / "already_here.json").exists()
+        assert not (new_state_dir / "spotify").exists()
+
+    def test_returns_false_when_nothing_to_migrate(self):
+        assert migrate_legacy_storage() is False
+
+    def test_returns_false_for_empty_legacy_dirs(self):
+        Path("state").mkdir()
+        Path("snapshots").mkdir()
+        assert migrate_legacy_storage() is False
+
+    def test_migrated_data_is_actually_loadable(self):
+        # End-to-end: old CWD-relative save, then migrate, then load via the
+        # normal API should see it at the new location.
+        legacy_state_dir = Path("state/spotify")
+        legacy_state_dir.mkdir(parents=True)
+        legacy_state_dir.joinpath("pl1.json").write_text(json.dumps(
+            make_playlist(songs=[make_song()]).to_dict()
+        ))
+
+        migrate_legacy_storage()
+
+        loaded = load_playlist_state("spotify", "pl1")
+        assert loaded is not None
+        assert loaded.songs[0].id == "s1"
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +232,7 @@ class TestDeletePlaylist:
         assert list_snapshot_versions("spotify", "pl1") == []
 
     def test_removes_legacy_snapshot_file(self):
-        legacy_dir = Path("snapshots/spotify")
+        legacy_dir = sh._data_dir() / "snapshots" / "spotify"
         legacy_dir.mkdir(parents=True)
         (legacy_dir / "pl1.json").write_text("[]")
         delete_playlist("spotify", "pl1")
@@ -183,7 +262,7 @@ class TestAtomicWrite:
 
     def test_no_leftover_tmp_file_after_successful_save(self):
         save_snapshot("spotify", "pl1", [make_song()])
-        assert list(Path("snapshots/spotify/pl1").glob("*.tmp")) == []
+        assert list((sh._data_dir() / "snapshots/spotify/pl1").glob("*.tmp")) == []
 
     def test_no_leftover_tmp_file_after_failed_save(self, monkeypatch):
         def boom(*args, **kwargs):
@@ -193,7 +272,7 @@ class TestAtomicWrite:
         with pytest.raises(RuntimeError):
             save_snapshot("spotify", "pl1", [make_song()])
 
-        assert list(Path("snapshots/spotify/pl1").glob("*.tmp")) == []
+        assert list((sh._data_dir() / "snapshots/spotify/pl1").glob("*.tmp")) == []
 
     def test_playlist_state_write_is_also_atomic(self, monkeypatch):
         save_playlist_state(make_playlist(songs=[make_song("Old", "old")]))
@@ -299,7 +378,7 @@ class TestListPlaylists:
         assert len(list_playlists()) == 3
 
     def test_ignores_non_json_files(self):
-        state_dir = Path("state/spotify")
+        state_dir = sh._data_dir() / "state" / "spotify"
         state_dir.mkdir(parents=True)
         (state_dir / "README.txt").write_text("not json")
         save_playlist_state(make_playlist())

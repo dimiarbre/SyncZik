@@ -40,6 +40,7 @@ def make_provider(songs: list[Song], new_id: str = "new_pl") -> ServiceProvider:
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNCZIK_DATA_DIR", str(tmp_path / "xdg_data"))
 
 
 # ---------------------------------------------------------------------------
@@ -132,13 +133,13 @@ class TestCherryPick:
     def test_persists_state_after_pick(self):
         target = make_playlist(songs=[])
         cherry_pick(target, [make_song("A", "a")])
-        assert Path("state/spotify/pl1.json").exists()
+        assert (sh._data_dir() / "state/spotify/pl1.json").exists()
 
     def test_no_persistence_when_nothing_added(self):
         a = make_song("A", "a")
         target = make_playlist(songs=[a])
         cherry_pick(target, [a])
-        assert not Path("state/spotify/pl1.json").exists()
+        assert not (sh._data_dir() / "state/spotify/pl1.json").exists()
 
     def test_pick_from_diff_result(self):
         a, b, c = make_song("A", "a"), make_song("B", "b"), make_song("C", "c")
@@ -167,8 +168,8 @@ class TestForkFromUser:
         songs = [make_song("A", "a")]
         provider = make_provider(songs, new_id="forked123")
         fork_from_user(provider, "user", "source_pl", "My Fork")
-        assert Path("state/spotify/forked123.json").exists()
-        assert list(Path("snapshots/spotify/forked123").glob("*.json"))
+        assert (sh._data_dir() / "state/spotify/forked123.json").exists()
+        assert list((sh._data_dir() / "snapshots/spotify/forked123").glob("*.json"))
 
     def test_fork_includes_custom_description(self):
         songs = [make_song("A", "a")]

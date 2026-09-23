@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 from pathlib import Path
 
 import pytest
+import SyncZik.snapshot_handler as sh
 from SyncZik.syncer import Artist, Song, Playlist
 from SyncZik.sync_engine import (
     MergeResult,
@@ -52,6 +53,7 @@ def make_provider(
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNCZIK_DATA_DIR", str(tmp_path / "xdg_data"))
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +82,8 @@ class TestClone:
         songs = [make_song("A", "a")]
         provider = make_provider(songs, new_playlist_id="new123")
         clone(provider, "user", "source_id", "Clone")
-        assert Path("state/spotify/new123.json").exists()
-        assert list(Path("snapshots/spotify/new123").glob("*.json"))
+        assert (sh._data_dir() / "state/spotify/new123.json").exists()
+        assert list((sh._data_dir() / "snapshots/spotify/new123").glob("*.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +182,7 @@ class TestStaging:
         result = add_song(p, b)
         assert result is True
         assert b in p.songs
-        assert Path("state/spotify/pl1.json").exists()
+        assert (sh._data_dir() / "state/spotify/pl1.json").exists()
 
     def test_add_song_no_duplicate(self):
         a = make_song("A", "a")
@@ -224,7 +226,7 @@ class TestApplyRemoteRemoval:
         p = make_playlist([a, b])
         provider = make_provider([a])
         apply_remote_removal(provider, p, [b])
-        assert Path("state/spotify/pl1.json").exists()
+        assert (sh._data_dir() / "state/spotify/pl1.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +287,7 @@ class TestSyncEdgeCases:
         provider = make_provider([], new_playlist_id="empty_clone")
         p = clone(provider, "user", "source_id", "Empty Clone")
         assert p.songs == []
-        assert Path("state/spotify/empty_clone.json").exists()
+        assert (sh._data_dir() / "state/spotify/empty_clone.json").exists()
 
     def test_sync_updates_last_synced_timestamp(self):
         songs = [make_song("A", "a")]
