@@ -28,11 +28,25 @@ class Artist:
 
 
 class Song:
-    def __init__(self, name: str, artists: list[Artist], uri: str, id: str):
+    def __init__(
+        self,
+        name: str,
+        artists: list[Artist],
+        uri: str,
+        id: str,
+        album: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        isrc: Optional[str] = None,
+        added_at: Optional[str] = None,
+    ):
         self.name = name
         self.artists = artists
         self.uri = uri
         self.id = id
+        self.album = album
+        self.duration_ms = duration_ms
+        self.isrc = isrc
+        self.added_at = added_at
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Song):
@@ -48,6 +62,10 @@ class Song:
             "artists": [a.to_dict() for a in self.artists],
             "uri": self.uri,
             "id": self.id,
+            "album": self.album,
+            "duration_ms": self.duration_ms,
+            "isrc": self.isrc,
+            "added_at": self.added_at,
         }
 
     @classmethod
@@ -57,6 +75,10 @@ class Song:
             artists=[Artist.from_dict(a) for a in d["artists"]],
             uri=d["uri"],
             id=d["id"],
+            album=d.get("album"),
+            duration_ms=d.get("duration_ms"),
+            isrc=d.get("isrc"),
+            added_at=d.get("added_at"),
         )
 
 
