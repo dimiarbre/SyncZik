@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import inspect
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Callable, Literal, TypeVar
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.dom import DOMNode
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     DataTable,
@@ -17,11 +24,12 @@ from textual.widgets import (
     Tree,
 )
 from textual.widgets.tree import TreeNode
+from textual.worker import WorkerFailed
 
 from .auth import get_deezer_client, get_spotify_client
 from .config import SPOTIFY_USER_ID
 from .cross_platform import ExportPlan, MatchKind, SongConflict, execute_export, plan_export
-from .playlist_git import cherry_pick, diff, fork_from_user, songs_in_playlist
+from .playlist_git import PlaylistDiff, cherry_pick, diff, fork_from_user, songs_in_playlist
 from .providers.base import ServiceProvider
 from .providers.deezer import DeezerProvider
 from .providers.spotify import SpotifyProvider
@@ -36,6 +44,8 @@ from .sync_engine import (
     sync,
 )
 from .syncer import Playlist, Song
+
+T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
@@ -67,11 +77,43 @@ def resolve_clone_user_id(provider: ServiceProvider) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Async helpers — keep the UI responsive during provider network calls
+# ---------------------------------------------------------------------------
+
+async def run_blocking(node: DOMNode, fn: Callable[[], T]) -> T:
+    """Run a blocking provider call in a worker thread so it doesn't freeze the UI.
+
+    Re-raises the original exception (not WorkerFailed) so callers can keep
+    their existing `except Exception` handling unchanged.
+    """
+    worker = node.run_worker(fn, thread=True, exit_on_error=False)
+    try:
+        return await worker.wait()
+    except WorkerFailed as wf:
+        assert wf.error is not None
+        raise wf.error from wf
+
+
+@asynccontextmanager
+async def loading(*widgets: Widget) -> AsyncIterator[None]:
+    """Show Textual's built-in loading indicator on `widgets` for the block's duration."""
+    for w in widgets:
+        w.loading = True
+    try:
+        yield
+    finally:
+        for w in widgets:
+            w.loading = False
+
+
+# ---------------------------------------------------------------------------
 # Modal screens
 # ---------------------------------------------------------------------------
 
 class InputModal(ModalScreen[str | None]):
     """Single-line text input dialog."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def __init__(self, title: str, placeholder: str = "") -> None:
         super().__init__()
@@ -95,9 +137,14 @@ class InputModal(ModalScreen[str | None]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip() or None)
 
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
 
 class ProviderPickerModal(ModalScreen[ServiceName | None]):
     """Let the user pick a platform — used both for export target and home provider."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def __init__(self, title: str = "Export to which platform?") -> None:
         super().__init__()
@@ -119,9 +166,14 @@ class ProviderPickerModal(ModalScreen[ServiceName | None]):
         else:
             self.dismiss(None)
 
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
 
 class SearchModal(ModalScreen[Song | None]):
     """Search for a track and let the user pick one."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def __init__(self, provider: ServiceProvider) -> None:
         super().__init__()
@@ -137,12 +189,18 @@ class SearchModal(ModalScreen[Song | None]):
                 yield Button("Add selected", variant="primary", id="ok")
                 yield Button("Cancel", id="cancel")
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
         query = event.value.strip()
         if not query:
             return
-        self._results = self._provider.search_tracks(query, limit=8)
         lv = self.query_one("#search-results", ListView)
+        provider = self._provider
+        try:
+            async with loading(lv):
+                self._results = await run_blocking(self, lambda: provider.search_tracks(query, limit=8))
+        except Exception as e:
+            self.notify(f"Search error: {e}", severity="error")
+            return
         lv.clear()
         for song in self._results:
             artist = song.artists[0].name if song.artists else "?"
@@ -159,14 +217,22 @@ class SearchModal(ModalScreen[Song | None]):
         else:
             self.dismiss(None)
 
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
 
 class SyncResultModal(ModalScreen[list[Song]]):
-    """Show sync results and let the user decide which pending removals to apply."""
+    """Show sync results and let the user decide, per song, which pending removals to apply."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("space", "toggle_current", "Toggle", show=False),
+    ]
 
     def __init__(self, result: MergeResult) -> None:
         super().__init__()
         self._result = result
-        self._keep: set[str] = set()  # song IDs the user chooses to keep
+        self._to_remove: set[str] = set()  # pending-song IDs to also remove locally
 
     def compose(self) -> ComposeResult:
         r = self._result
@@ -187,7 +253,7 @@ class SyncResultModal(ModalScreen[list[Song]]):
             if r.removed_from_remote_pending:
                 yield Label(
                     f"{len(r.removed_from_remote_pending)} song(s) were removed from the remote.\n"
-                    "Choose what to do with each:",
+                    "Enter or Space toggles removing one locally too; unchecked = keep it:",
                     id="pending-label",
                 )
                 yield ListView(id="pending-list")
@@ -198,20 +264,59 @@ class SyncResultModal(ModalScreen[list[Song]]):
                 yield Button("Done", variant="primary", id="done")
 
     def on_mount(self) -> None:
-        if self._result.removed_from_remote_pending:
-            lv = self.query_one("#pending-list", ListView)
-            for song in self._result.removed_from_remote_pending:
-                artist = song.artists[0].name if song.artists else "?"
-                lv.append(ListItem(Label(f"[yellow]?[/yellow] {song.name}  —  {artist}")))
+        self._render_pending()
+
+    def _render_pending(self) -> None:
+        pending = self._result.removed_from_remote_pending
+        if not pending:
+            return
+        lv = self.query_one("#pending-list", ListView)
+        lv.clear()
+        for song in pending:
+            artist = song.artists[0].name if song.artists else "?"
+            mark = "x" if song.id in self._to_remove else " "
+            lv.append(ListItem(Label(f"[{mark}] {song.name}  —  {artist}")))
+
+    def _toggle(self, idx: int) -> None:
+        pending = self._result.removed_from_remote_pending
+        if idx >= len(pending):
+            return
+        song = pending[idx]
+        if song.id in self._to_remove:
+            self._to_remove.discard(song.id)
+        else:
+            self._to_remove.add(song.id)
+        lv = self.query_one("#pending-list", ListView)
+        label = lv.children[idx].query_one(Label)
+        artist = song.artists[0].name if song.artists else "?"
+        mark = "x" if song.id in self._to_remove else " "
+        label.update(f"[{mark}] {song.name}  —  {artist}")
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = self.query_one("#pending-list", ListView).index
+        if idx is not None:
+            self._toggle(idx)
+
+    def action_toggle_current(self) -> None:
+        idx = self.query_one("#pending-list", ListView).index
+        if idx is not None:
+            self._toggle(idx)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         pending = self._result.removed_from_remote_pending
         if event.button.id == "remove-all":
-            self.dismiss(list(pending))
+            self._to_remove = {s.id for s in pending}
+            self._render_pending()
         elif event.button.id == "keep-all":
-            self.dismiss([])
-        else:
-            self.dismiss([])
+            self._to_remove = set()
+            self._render_pending()
+        elif event.button.id == "done":
+            by_id = {s.id: s for s in pending}
+            self.dismiss([by_id[sid] for sid in self._to_remove if sid in by_id])
+
+    def action_cancel(self) -> None:
+        # No destructive default: escaping keeps every pending song locally.
+        self.dismiss([])
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +325,11 @@ class SyncResultModal(ModalScreen[list[Song]]):
 
 class CherryPickModal(ModalScreen[list[Song]]):
     """Browse a remote playlist, show songs not in the target, let user pick."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("space", "toggle_current", "Toggle", show=False),
+    ]
 
     def __init__(self, provider: ServiceProvider, target: Playlist) -> None:
         super().__init__()
@@ -239,16 +349,20 @@ class CherryPickModal(ModalScreen[list[Song]]):
                 yield Button("Select all", id="select-all")
                 yield Button("Cancel", id="cancel")
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
         raw = event.value.strip()
         if not raw:
             return
         if "/" in raw:
             raw = raw.rstrip("/").split("/")[-1].split("?")[0]
+
+        hint = self.query_one("#pick-hint", Static)
+        provider = self._provider
         try:
-            remote_songs = songs_in_playlist(self._provider, raw)
+            async with loading(self.query_one("#pick-list", ListView)):
+                remote_songs = await run_blocking(self, lambda: songs_in_playlist(provider, raw))
         except Exception as e:
-            self.query_one("#pick-hint", Static).update(f"[red]Error: {e}[/red]")
+            hint.update(f"[red]Error: {e}[/red]")
             return
 
         target_ids = {s.id for s in self._target.songs}
@@ -257,27 +371,37 @@ class CherryPickModal(ModalScreen[list[Song]]):
 
         lv = self.query_one("#pick-list", ListView)
         lv.clear()
-        hint = self.query_one("#pick-hint", Static)
         if not self._candidates:
             hint.update("[yellow]No new songs found — target already has everything.[/yellow]")
             return
-        hint.update(f"{len(self._candidates)} new song(s) found. Space to toggle, then Pick.")
+        hint.update(f"{len(self._candidates)} new song(s) found. Enter or Space to toggle, then Pick.")
         for song in self._candidates:
             artist = song.artists[0].name if song.artists else "?"
             lv.append(ListItem(Label(f"[ ] {song.name}  —  {artist}")))
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        idx = self.query_one("#pick-list", ListView).index
-        if idx is None or idx >= len(self._candidates):
+    def _toggle(self, idx: int) -> None:
+        if idx >= len(self._candidates):
             return
         song = self._candidates[idx]
-        label = event.item.query_one(Label)
+        lv = self.query_one("#pick-list", ListView)
+        label = lv.children[idx].query_one(Label)
+        artist = song.artists[0].name if song.artists else "?"
         if song.id in self._selected_ids:
             self._selected_ids.discard(song.id)
-            label.update(f"[ ] {song.name}  —  {song.artists[0].name if song.artists else '?'}")
+            label.update(f"[ ] {song.name}  —  {artist}")
         else:
             self._selected_ids.add(song.id)
-            label.update(f"[x] {song.name}  —  {song.artists[0].name if song.artists else '?'}")
+            label.update(f"[x] {song.name}  —  {artist}")
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = self.query_one("#pick-list", ListView).index
+        if idx is not None:
+            self._toggle(idx)
+
+    def action_toggle_current(self) -> None:
+        idx = self.query_one("#pick-list", ListView).index
+        if idx is not None:
+            self._toggle(idx)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel":
@@ -293,6 +417,9 @@ class CherryPickModal(ModalScreen[list[Song]]):
             by_id = {s.id: s for s in self._candidates}
             self.dismiss([by_id[sid] for sid in self._selected_ids if sid in by_id])
 
+    def action_cancel(self) -> None:
+        self.dismiss([])
+
 
 # ---------------------------------------------------------------------------
 # Export conflict resolver
@@ -307,6 +434,8 @@ class ExportConflictScreen(ModalScreen[list[Song]]):
 
     Dismisses with the list of target-platform songs to include in the export.
     """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def __init__(
         self,
@@ -364,17 +493,19 @@ class ExportConflictScreen(ModalScreen[list[Song]]):
             a = song.artists[0].name if song.artists else "?"
             lv.append(ListItem(Label(f"{song.name}  —  {a}")))
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
         query = event.value.strip()
         if not query:
             return
+        lv = self.query_one("#conflict-candidates", ListView)
+        provider = self._target_provider
         try:
-            results = self._target_provider.search_tracks(query, limit=8)
+            async with loading(lv):
+                results = await run_blocking(self, lambda: provider.search_tracks(query, limit=8))
         except Exception as e:
             self.query_one("#conflict-info", Static).update(f"[red]Search error: {e}[/red]")
             return
         self._search_results = results
-        lv = self.query_one("#conflict-candidates", ListView)
         lv.clear()
         for song in results:
             a = song.artists[0].name if song.artists else "?"
@@ -391,6 +522,145 @@ class ExportConflictScreen(ModalScreen[list[Song]]):
             self._next_conflict()
         elif event.button.id == "done":
             self.dismiss(self._resolved)
+
+    def action_cancel(self) -> None:
+        self.dismiss(self._resolved)
+
+
+# ---------------------------------------------------------------------------
+# Playlist picker (used by Diff) and diff result
+# ---------------------------------------------------------------------------
+
+class PlaylistPickerModal(ModalScreen[Playlist | None]):
+    """Let the user pick one of several already-tracked playlists."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, playlists: list[Playlist], title: str) -> None:
+        super().__init__()
+        self._playlists = playlists
+        self._title = title
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self._title, id="dialog-title")
+            yield ListView(id="playlist-picker-list")
+            with Horizontal(id="dialog-buttons"):
+                yield Button("Select", variant="primary", id="ok")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#playlist-picker-list", ListView)
+        for p in self._playlists:
+            lv.append(ListItem(Label(f"{p.name}  ({p.service})")))
+
+    def _pick(self, idx: int | None) -> None:
+        if idx is not None and 0 <= idx < len(self._playlists):
+            self.dismiss(self._playlists[idx])
+        else:
+            self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self._pick(self.query_one("#playlist-picker-list", ListView).index)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+        else:
+            self._pick(self.query_one("#playlist-picker-list", ListView).index)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class DiffResultModal(ModalScreen[None]):
+    """Show the symmetric difference between two tracked playlists."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, left: Playlist, right: Playlist, result: PlaylistDiff) -> None:
+        super().__init__()
+        self._left = left
+        self._right = right
+        self._result = result
+
+    def compose(self) -> ComposeResult:
+        r = self._result
+        with Vertical(id="dialog"):
+            yield Label(f'Diff: "{self._left.name}" vs "{self._right.name}"', id="dialog-title")
+            if r.is_identical():
+                yield Static("[green]Identical — same songs on both sides.[/green]", id="diff-summary")
+            else:
+                yield Static(
+                    f'Only in "{self._left.name}": {len(r.only_in_left)}\n'
+                    f'Only in "{self._right.name}": {len(r.only_in_right)}\n'
+                    f"In both: {len(r.in_both)}",
+                    id="diff-summary",
+                )
+                yield ListView(id="diff-list")
+            with Horizontal(id="dialog-buttons"):
+                yield Button("Done", variant="primary", id="done")
+
+    def on_mount(self) -> None:
+        r = self._result
+        if r.is_identical():
+            return
+        lv = self.query_one("#diff-list", ListView)
+        for song in r.only_in_left:
+            artist = song.artists[0].name if song.artists else "?"
+            lv.append(ListItem(Label(f"[cyan]<[/cyan] {song.name}  —  {artist}")))
+        for song in r.only_in_right:
+            artist = song.artists[0].name if song.artists else "?"
+            lv.append(ListItem(Label(f"[magenta]>[/magenta] {song.name}  —  {artist}")))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
+
+HELP_TEXT = """\
+[bold]SyncZik[/bold] brings a git-like workflow to your playlists.
+
+[bold]L[/bold]  Load        — import a playlist by URL/ID from your home provider
+[bold]C[/bold]  Clone       — fork the selected playlist (tracked locally + remotely)
+[bold]S[/bold]  Sync        — bidirectional merge: push local changes, pull remote ones
+[bold]A[/bold]  Add song    — search your home provider, stage a song ([local] until Sync)
+[bold]D[/bold]  Remove      — stage the selected song for removal (applied on next Sync)
+[bold]P[/bold]  Cherry-pick — pull individual songs in from another tracked playlist
+[bold]E[/bold]  Export      — copy the playlist to another platform
+[bold]V[/bold]  Diff        — compare two tracked playlists song-by-song
+[bold]U[/bold]  Undo        — undo the last staged Add/Remove/Cherry-pick
+[bold]?[/bold]  Help        — this screen
+[bold]Q[/bold]  Quit
+
+Songs marked [local] are staged locally and not yet pushed — press Sync to
+push them. Escape backs out of any dialog without applying it.
+"""
+
+
+class HelpModal(ModalScreen[None]):
+    """Static reference for the app's keybindings and workflow."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Help", id="dialog-title")
+            yield Static(HELP_TEXT, id="help-text")
+            with Horizontal(id="dialog-buttons"):
+                yield Button("Close", variant="primary", id="close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +781,22 @@ ModalScreen {
 #conflict-search {
     margin-top: 1;
 }
+
+#playlist-picker-list {
+    height: 10;
+    border: solid $panel;
+    margin-top: 1;
+}
+
+#diff-list {
+    height: 10;
+    border: solid $panel;
+    margin-top: 1;
+}
+
+#help-text {
+    margin-top: 1;
+}
 """
 
 
@@ -526,6 +812,9 @@ class SyncZikApp(App):
         Binding("l", "load_playlist", "Load playlist"),
         Binding("p", "cherry_pick", "Cherry-pick"),
         Binding("e", "export_playlist", "Export"),
+        Binding("v", "diff_playlists", "Diff"),
+        Binding("u", "undo", "Undo"),
+        Binding("question_mark", "show_help", "Help", key_display="?"),
     ]
 
     def __init__(self) -> None:
@@ -533,6 +822,7 @@ class SyncZikApp(App):
         self._provider: ServiceProvider | None = None
         self._playlists: list[Playlist] = []
         self._selected: Playlist | None = None
+        self._last_action: tuple[Literal["add", "remove"], Playlist, list[Song]] | None = None
 
     # ------------------------------------------------------------------
     # Layout
@@ -585,6 +875,11 @@ class SyncZikApp(App):
         tree = self.query_one("#playlist-tree", Tree)
         tree.root.remove_children()
 
+        if not self._playlists:
+            tree.root.add_leaf("(no playlists yet — press L to load one)", data=None)
+            tree.root.expand()
+            return
+
         roots: dict[str, TreeNode] = {}
         children: list[Playlist] = []
 
@@ -623,8 +918,8 @@ class SyncZikApp(App):
     # Button → action routing
     # ------------------------------------------------------------------
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        mapping = {
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        mapping: dict[str, Callable[[], object]] = {
             "btn-load": self.action_load_playlist,
             "btn-clone": self.action_clone_playlist,
             "btn-sync": self.action_sync_playlist,
@@ -634,31 +929,39 @@ class SyncZikApp(App):
             "btn-export": self.action_export_playlist,
         }
         handler = mapping.get(event.button.id or "")
-        if handler:
-            handler()
+        if handler is None:
+            return
+        result = handler()
+        if inspect.isawaitable(result):
+            await result
 
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
 
     def action_load_playlist(self) -> None:
-        def on_result(playlist_id: str | None) -> None:
+        async def on_result(playlist_id: str | None) -> None:
             if not playlist_id or self._provider is None:
                 return
             playlist_id = playlist_id.strip()
             # Accept full URLs: https://open.spotify.com/playlist/<id>
             if "/" in playlist_id:
                 playlist_id = playlist_id.rstrip("/").split("/")[-1].split("?")[0]
+            provider = self._provider
+            tree = self.query_one("#playlist-tree", Tree)
+            table = self.query_one("#song-table", DataTable)
             try:
-                playlist = self._provider.get_playlist(playlist_id)
-                from .snapshot_handler import save_playlist_state, save_snapshot
-                save_snapshot(playlist.service, playlist.service_id, playlist.songs)
-                save_playlist_state(playlist)
-                self._refresh_playlist_tree()
-                self._show_songs(playlist)
-                self.notify(f'Loaded "{playlist.name}"')
+                async with loading(tree, table):
+                    playlist = await run_blocking(self, lambda: provider.get_playlist(playlist_id))
             except Exception as e:
                 self.notify(f"Error: {e}", severity="error")
+                return
+            from .snapshot_handler import save_playlist_state, save_snapshot
+            save_snapshot(playlist.service, playlist.service_id, playlist.songs)
+            save_playlist_state(playlist)
+            self._refresh_playlist_tree()
+            self._show_songs(playlist)
+            self.notify(f'Loaded "{playlist.name}"')
 
         provider_label = "Deezer" if self._provider and self._provider.service_name == "deezer" else "Spotify"
         self.push_screen(
@@ -670,21 +973,29 @@ class SyncZikApp(App):
             self.notify("Select a playlist first.", severity="warning")
             return
 
-        def on_result(name: str | None) -> None:
+        async def on_result(name: str | None) -> None:
             if not name or self._provider is None or self._selected is None:
                 return
-            user_id = resolve_clone_user_id(self._provider)
+            provider = self._provider
+            selected = self._selected
+            user_id = resolve_clone_user_id(provider)
             if user_id is None:
                 self.notify("SPOTIFY_USER_ID not set in .env", severity="error")
                 return
+            tree = self.query_one("#playlist-tree", Tree)
+            table = self.query_one("#song-table", DataTable)
             try:
-                new_playlist = clone(
-                    self._provider,
-                    user_id,
-                    self._selected.service_id,
-                    name,
-                    description=f"Clone of {self._selected.name} — managed by SyncZik",
-                )
+                async with loading(tree, table):
+                    new_playlist = await run_blocking(
+                        self,
+                        lambda: clone(
+                            provider,
+                            user_id,
+                            selected.service_id,
+                            name,
+                            description=f"Clone of {selected.name} — managed by SyncZik",
+                        ),
+                    )
                 self._refresh_playlist_tree()
                 self._show_songs(new_playlist)
                 self.notify(f'Cloned to "{name}"')
@@ -696,15 +1007,19 @@ class SyncZikApp(App):
             on_result,
         )
 
-    def action_sync_playlist(self) -> None:
+    async def action_sync_playlist(self) -> None:
         if self._selected is None:
             self.notify("Select a playlist first.", severity="warning")
             return
         if self._provider is None:
             return
 
+        provider = self._provider
+        selected = self._selected
+        table = self.query_one("#song-table", DataTable)
         try:
-            result = sync(self._provider, self._selected)
+            async with loading(table):
+                result = await run_blocking(self, lambda: sync(provider, selected))
         except Exception as e:
             self.notify(f"Sync error: {e}", severity="error")
             return
@@ -736,6 +1051,7 @@ class SyncZikApp(App):
                 return
             added = add_song(self._selected, song)
             if added:
+                self._last_action = ("add", self._selected, [song])
                 self._show_songs(self._selected)
                 self.notify(f'Added "{song.name}" (staged — Sync to push)')
             else:
@@ -755,6 +1071,7 @@ class SyncZikApp(App):
         song = self._selected.songs[row_key]
         removed = remove_song(self._selected, song)
         if removed:
+            self._last_action = ("remove", self._selected, [song])
             self._show_songs(self._selected)
             self.notify(f'Removed "{song.name}" (staged — Sync to push)')
 
@@ -770,6 +1087,7 @@ class SyncZikApp(App):
                 return
             added = cherry_pick(self._selected, picked)
             if added:
+                self._last_action = ("add", self._selected, added)
                 self._show_songs(self._selected)
                 self.notify(f"Cherry-picked {len(added)} song(s) (staged — Sync to push)")
             else:
@@ -800,12 +1118,16 @@ class SyncZikApp(App):
                 self.notify("SPOTIFY_USER_ID not set in .env", severity="error")
                 return
 
-            def on_name(export_name: str | None) -> None:
+            async def on_name(export_name: str | None) -> None:
                 if not export_name or self._selected is None:
                     return
-                selected_name = self._selected.name
+                selected_songs = self._selected.songs
+                table = self.query_one("#song-table", DataTable)
                 try:
-                    export_plan = plan_export(self._selected.songs, target_provider)
+                    async with loading(table):
+                        export_plan = await run_blocking(
+                            self, lambda: plan_export(selected_songs, target_provider)
+                        )
                 except Exception as e:
                     self.notify(f"Export planning error: {e}", severity="error")
                     return
@@ -813,19 +1135,30 @@ class SyncZikApp(App):
                 if export_plan.is_clean():
                     # No conflicts — execute immediately
                     songs = [t for _, t in export_plan.auto_resolved]
-                    execute_export(
-                        target_provider, user_id, export_name, songs,
-                        description=f"Exported from {selected_name} — managed by SyncZik",
-                    )
-                    self.notify(f'Exported "{export_name}" ({len(songs)} songs, no conflicts)')
+                    try:
+                        async with loading(table):
+                            await run_blocking(
+                                self,
+                                lambda: execute_export(
+                                    target_provider, user_id, export_name, songs,
+                                    description=f"Exported from {selected_name} — managed by SyncZik",
+                                ),
+                            )
+                        self.notify(f'Exported "{export_name}" ({len(songs)} songs, no conflicts)')
+                    except Exception as e:
+                        self.notify(f"Export error: {e}", severity="error")
                     return
 
-                def on_resolved(resolved_songs: list[Song]) -> None:
+                async def on_resolved(resolved_songs: list[Song]) -> None:
                     try:
-                        execute_export(
-                            target_provider, user_id, export_name, resolved_songs,
-                            description=f"Exported from {selected_name} — managed by SyncZik",
-                        )
+                        async with loading(table):
+                            await run_blocking(
+                                self,
+                                lambda: execute_export(
+                                    target_provider, user_id, export_name, resolved_songs,
+                                    description=f"Exported from {selected_name} — managed by SyncZik",
+                                ),
+                            )
                         skipped = export_plan.total() - len(resolved_songs)
                         self.notify(
                             f'Exported "{export_name}" ({len(resolved_songs)} songs'
@@ -842,6 +1175,49 @@ class SyncZikApp(App):
             )
 
         self.push_screen(ProviderPickerModal(), on_platform)
+
+    def action_diff_playlists(self) -> None:
+        if self._selected is None:
+            self.notify("Select a playlist first.", severity="warning")
+            return
+        selected = self._selected
+        others = [
+            p for p in self._playlists
+            if not (p.service == selected.service and p.service_id == selected.service_id)
+        ]
+        if not others:
+            self.notify("No other tracked playlist to diff against.", severity="warning")
+            return
+
+        def on_picked(other: Playlist | None) -> None:
+            if other is None:
+                return
+            result = diff(selected, other)
+            self.push_screen(DiffResultModal(selected, other, result))
+
+        self.push_screen(
+            PlaylistPickerModal(others, title=f'Diff "{selected.name}" against…'), on_picked
+        )
+
+    def action_undo(self) -> None:
+        if self._last_action is None:
+            self.notify("Nothing to undo.", severity="warning")
+            return
+        kind, playlist, songs = self._last_action
+        self._last_action = None
+        if kind == "add":
+            for song in songs:
+                remove_song(playlist, song)
+            self.notify(f"Undid: unstaged {len(songs)} added song(s)")
+        else:
+            for song in songs:
+                add_song(playlist, song)
+            self.notify(f"Undid: restored {len(songs)} removed song(s)")
+        if self._selected is playlist:
+            self._show_songs(playlist)
+
+    def action_show_help(self) -> None:
+        self.push_screen(HelpModal())
 
 
 def run() -> None:
