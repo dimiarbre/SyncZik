@@ -1,5 +1,4 @@
-import pytest
-from SyncZik.syncer import Artist, Song, Playlist
+from SyncZik.syncer import Artist, Playlist, Song
 
 
 def make_song(name="Track", id="id1", uri="spotify:track:id1") -> Song:
@@ -37,8 +36,14 @@ class TestSongMetadata:
 
     def test_roundtrip_with_metadata(self):
         s = Song(
-            name="A", artists=[Artist("Art", "a1")], uri="u", id="i",
-            album="Album", duration_ms=123456, isrc="US123", added_at="2024-01-01T00:00:00Z",
+            name="A",
+            artists=[Artist("Art", "a1")],
+            uri="u",
+            id="i",
+            album="Album",
+            duration_ms=123456,
+            isrc="US123",
+            added_at="2024-01-01T00:00:00Z",
         )
         loaded = Song.from_dict(s.to_dict())
         assert loaded.album == "Album"
@@ -102,8 +107,14 @@ class TestPlaylist:
         assert p.remove_song(s) is False
 
     def test_roundtrip_with_songs(self):
-        p = Playlist(service="spotify", service_id="p1", name="P", owner="me",
-                     parent_id="source1", parent_service="spotify")
+        p = Playlist(
+            service="spotify",
+            service_id="p1",
+            name="P",
+            owner="me",
+            parent_id="source1",
+            parent_service="spotify",
+        )
         p.add_song(make_song("A", "id_a", "spotify:track:id_a"))
         p.add_song(make_song("B", "id_b", "spotify:track:id_b"))
         p2 = Playlist.from_dict(p.to_dict())

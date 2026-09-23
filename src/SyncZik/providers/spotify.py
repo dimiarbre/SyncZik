@@ -1,8 +1,8 @@
 import spotipy
 
-from .base import ServiceProvider, resilient_call
 from ..syncer import Artist, Playlist, Song
 from ..utils import ServiceName
+from .base import ServiceProvider, resilient_call
 
 _BATCH_SIZE = 100
 
@@ -77,22 +77,24 @@ class SpotifyProvider(ServiceProvider):
         ]
 
     def create_playlist(self, user_id: str, name: str, description: str = "") -> str:
-        result = resilient_call(lambda: self._sp.user_playlist_create(
-            user=user_id,
-            name=name,
-            public=True,
-            description=description,
-        ))
+        result = resilient_call(
+            lambda: self._sp.user_playlist_create(
+                user=user_id,
+                name=name,
+                public=True,
+                description=description,
+            )
+        )
         return result["id"]
 
     def add_songs(self, playlist_id: str, songs: list[Song]) -> None:
         uris = [s.uri for s in songs]
         for i in range(0, len(uris), _BATCH_SIZE):
-            batch = uris[i:i + _BATCH_SIZE]
+            batch = uris[i : i + _BATCH_SIZE]
             resilient_call(lambda: self._sp.playlist_add_items(playlist_id, batch))
 
     def remove_songs(self, playlist_id: str, songs: list[Song]) -> None:
         uris = [s.uri for s in songs]
         for i in range(0, len(uris), _BATCH_SIZE):
-            batch = uris[i:i + _BATCH_SIZE]
+            batch = uris[i : i + _BATCH_SIZE]
             resilient_call(lambda: self._sp.playlist_remove_all_occurrences_of_items(playlist_id, batch))

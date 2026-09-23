@@ -16,6 +16,7 @@ from SyncZik.syncer import Artist, Playlist, Song
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNCZIK_DATA_DIR", str(tmp_path / "xdg_data"))
 
 
 def make_song(name="Track", id="id1") -> Song:
@@ -34,6 +35,7 @@ async def _boot(monkeypatch, pilot):
 # ---------------------------------------------------------------------------
 # build_provider
 # ---------------------------------------------------------------------------
+
 
 class TestBuildProvider:
     def test_deezer_choice_returns_deezer_provider(self, monkeypatch):
@@ -64,6 +66,7 @@ class TestBuildProvider:
 # resolve_clone_user_id
 # ---------------------------------------------------------------------------
 
+
 class TestResolveCloneUserId:
     def test_spotify_with_user_id_configured(self, monkeypatch):
         monkeypatch.setattr(tui, "SPOTIFY_USER_ID", "spotify_user_123")
@@ -86,6 +89,7 @@ class TestResolveCloneUserId:
 # SpotifyProvider -> ServiceProvider type-hint widening)
 # ---------------------------------------------------------------------------
 
+
 class TestModalsAcceptGenericProvider:
     def test_search_modal_construction(self):
         provider = MagicMock(spec=ServiceProvider)
@@ -105,6 +109,7 @@ class TestModalsAcceptGenericProvider:
 # Export/Cherry-pick's non-blocking network calls
 # ---------------------------------------------------------------------------
 
+
 class TestRunBlocking:
     def test_returns_function_result(self):
         async def scenario():
@@ -119,6 +124,7 @@ class TestRunBlocking:
         async def scenario():
             app = tui.SyncZikApp()
             async with app.run_test():
+
                 def boom():
                     raise ValueError("network error")
 
@@ -131,6 +137,7 @@ class TestRunBlocking:
 # ---------------------------------------------------------------------------
 # action_undo — one-level undo for the last staged add/remove/cherry-pick
 # ---------------------------------------------------------------------------
+
 
 class TestActionUndo:
     def test_nothing_to_undo_warns(self, monkeypatch):
@@ -183,6 +190,7 @@ class TestActionUndo:
 # ---------------------------------------------------------------------------
 # action_diff_playlists — wires playlist_git.diff() into the TUI
 # ---------------------------------------------------------------------------
+
 
 class TestActionDiffPlaylists:
     def test_warns_when_nothing_selected(self, monkeypatch):
@@ -255,6 +263,7 @@ class TestActionDiffPlaylists:
 # ---------------------------------------------------------------------------
 # SyncResultModal — per-song pending-removal decisions
 # ---------------------------------------------------------------------------
+
 
 class TestSyncResultModalPerSong:
     def test_toggle_marks_single_song_for_removal(self, monkeypatch):
@@ -344,6 +353,7 @@ class TestSyncResultModalPerSong:
 # bound Enter by default, so Space silently did nothing)
 # ---------------------------------------------------------------------------
 
+
 class TestCherryPickModalAsyncAndToggle:
     def test_fetch_runs_off_thread_and_populates_candidates(self, monkeypatch):
         async def scenario():
@@ -386,6 +396,7 @@ class TestCherryPickModalAsyncAndToggle:
                 await pilot.pause()
 
                 from textual.widgets import ListView
+
                 lv = modal.query_one("#pick-list", ListView)
                 lv.index = 0
 
@@ -402,6 +413,7 @@ class TestCherryPickModalAsyncAndToggle:
 # ---------------------------------------------------------------------------
 # Escape-to-cancel on modals
 # ---------------------------------------------------------------------------
+
 
 class TestEscapeToCancel:
     def test_input_modal_escape_dismisses_with_none(self, monkeypatch):
@@ -453,6 +465,7 @@ class TestEscapeToCancel:
 # Help screen
 # ---------------------------------------------------------------------------
 
+
 class TestHelpScreen:
     def test_action_show_help_pushes_help_modal(self, monkeypatch):
         async def scenario():
@@ -481,6 +494,7 @@ class TestHelpScreen:
 # First-run onboarding hint
 # ---------------------------------------------------------------------------
 
+
 class TestFirstRunHint:
     def test_empty_playlist_tree_shows_onboarding_hint(self, monkeypatch):
         async def scenario():
@@ -488,6 +502,7 @@ class TestFirstRunHint:
             async with app.run_test() as pilot:
                 await _boot(monkeypatch, pilot)
                 from textual.widgets import Tree
+
                 tree = app.query_one("#playlist-tree", Tree)
                 labels = [str(child.label) for child in tree.root.children]
                 assert any("press L to load" in label for label in labels)
@@ -498,6 +513,7 @@ class TestFirstRunHint:
 # ---------------------------------------------------------------------------
 # action_history / HistoryModal — log + revert wired into the TUI
 # ---------------------------------------------------------------------------
+
 
 class TestActionHistory:
     def test_warns_when_nothing_selected(self, monkeypatch):
@@ -581,6 +597,7 @@ class TestActionHistory:
 # action_rename_playlist
 # ---------------------------------------------------------------------------
 
+
 class TestActionRenamePlaylist:
     def test_warns_when_nothing_selected(self, monkeypatch):
         async def scenario():
@@ -620,6 +637,7 @@ class TestActionRenamePlaylist:
 # ---------------------------------------------------------------------------
 # action_untrack_playlist / ConfirmModal
 # ---------------------------------------------------------------------------
+
 
 class TestActionUntrackPlaylist:
     def test_warns_when_nothing_selected(self, monkeypatch):

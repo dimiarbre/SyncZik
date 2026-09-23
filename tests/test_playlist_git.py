@@ -1,12 +1,10 @@
-from pathlib import Path
+from datetime import UTC
 from unittest.mock import MagicMock
 
 import pytest
-from SyncZik.syncer import Artist, Song, Playlist
-from SyncZik.providers.base import ServiceProvider
+
+import SyncZik.snapshot_handler as sh
 from SyncZik.playlist_git import (
-    LogEntry,
-    PlaylistDiff,
     cherry_pick,
     diff,
     fork_from_user,
@@ -14,7 +12,8 @@ from SyncZik.playlist_git import (
     revert,
     songs_in_playlist,
 )
-import SyncZik.snapshot_handler as sh
+from SyncZik.providers.base import ServiceProvider
+from SyncZik.syncer import Artist, Playlist, Song
 
 
 def make_song(name="Track", id="s1") -> Song:
@@ -23,7 +22,7 @@ def make_song(name="Track", id="s1") -> Song:
 
 def make_playlist(service_id="pl1", songs=None) -> Playlist:
     p = Playlist(service="spotify", service_id=service_id, name="Test", owner="user")
-    for s in (songs or []):
+    for s in songs or []:
         p.add_song(s)
     return p
 
@@ -40,11 +39,13 @@ def make_provider(songs: list[Song], new_id: str = "new_pl") -> ServiceProvider:
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNCZIK_DATA_DIR", str(tmp_path / "xdg_data"))
 
 
 # ---------------------------------------------------------------------------
 # diff()
 # ---------------------------------------------------------------------------
+
 
 class TestDiff:
     def test_identical_playlists(self):
@@ -100,6 +101,7 @@ class TestDiff:
 # cherry_pick()
 # ---------------------------------------------------------------------------
 
+
 class TestCherryPick:
     def test_adds_new_songs(self):
         target = make_playlist(songs=[make_song("A", "a")])
@@ -132,13 +134,13 @@ class TestCherryPick:
     def test_persists_state_after_pick(self):
         target = make_playlist(songs=[])
         cherry_pick(target, [make_song("A", "a")])
-        assert Path("state/spotify/pl1.json").exists()
+        assert (sh._data_dir() / "state/spotify/pl1.json").exists()
 
     def test_no_persistence_when_nothing_added(self):
         a = make_song("A", "a")
         target = make_playlist(songs=[a])
         cherry_pick(target, [a])
-        assert not Path("state/spotify/pl1.json").exists()
+        assert not (sh._data_dir() / "state/spotify/pl1.json").exists()
 
     def test_pick_from_diff_result(self):
         a, b, c = make_song("A", "a"), make_song("B", "b"), make_song("C", "c")
@@ -154,6 +156,7 @@ class TestCherryPick:
 # fork_from_user()
 # ---------------------------------------------------------------------------
 
+
 class TestForkFromUser:
     def test_creates_new_playlist_on_remote(self):
         songs = [make_song("A", "a"), make_song("B", "b")]
@@ -167,8 +170,8 @@ class TestForkFromUser:
         songs = [make_song("A", "a")]
         provider = make_provider(songs, new_id="forked123")
         fork_from_user(provider, "user", "source_pl", "My Fork")
-        assert Path("state/spotify/forked123.json").exists()
-        assert list(Path("snapshots/spotify/forked123").glob("*.json"))
+        assert (sh._data_dir() / "state/spotify/forked123.json").exists()
+        assert list((sh._data_dir() / "snapshots/spotify/forked123").glob("*.json"))
 
     def test_fork_includes_custom_description(self):
         songs = [make_song("A", "a")]
@@ -180,6 +183,7 @@ class TestForkFromUser:
 # ---------------------------------------------------------------------------
 # songs_in_playlist()
 # ---------------------------------------------------------------------------
+
 
 class TestSongsInPlaylist:
     def test_fetches_remote_songs(self):
@@ -198,6 +202,7 @@ class TestSongsInPlaylist:
 # ---------------------------------------------------------------------------
 # log() — derived from the versioned snapshot history
 # ---------------------------------------------------------------------------
+
 
 class TestLog:
     def test_empty_when_nothing_recorded(self):
@@ -234,6 +239,7 @@ class TestLog:
 # revert() — local-only restore to a past snapshot version
 # ---------------------------------------------------------------------------
 
+
 class TestRevert:
     def test_restores_local_songs_to_past_version(self):
         a, b = make_song("A", "a"), make_song("B", "b")
@@ -259,7 +265,8 @@ class TestRevert:
         assert {s.id for s in loaded.songs} == {"a"}
 
     def test_raises_for_unknown_timestamp(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         playlist = make_playlist(songs=[make_song()])
         with pytest.raises(ValueError):
-            revert(playlist, datetime(2000, 1, 1, tzinfo=timezone.utc))
+            revert(playlist, datetime(2000, 1, 1, tzinfo=UTC))

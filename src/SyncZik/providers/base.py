@@ -1,12 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Callable, TypeVar
+from collections.abc import Callable
 
 from ..exceptions import translate_provider_error
 from ..retry import with_retry
 from ..syncer import Playlist, Song
 from ..utils import ServiceName
-
-T = TypeVar("T")
 
 
 class ServiceProvider(ABC):
@@ -47,7 +45,7 @@ class ServiceProvider(ABC):
         ...
 
 
-def resilient_call(fn: Callable[[], T], *, max_attempts: int = 3, base_delay: float = 1.0) -> T:
+def resilient_call[T](fn: Callable[[], T], *, max_attempts: int = 3, base_delay: float = 1.0) -> T:
     """Retry a provider API call on transient failure, then translate any error.
 
     Shared by SpotifyProvider/DeezerProvider so every outbound call gets the

@@ -2,5 +2,6 @@ setuptools
 spotipy
 deezer-python
 httpx
+platformdirs
 python-dotenv
 textual

@@ -4,6 +4,7 @@ Provider implementations translate the underlying library's raw exceptions
 into one of these, so callers (sync_engine, tui) get a consistent, actionable
 error regardless of which streaming service raised it.
 """
+
 from __future__ import annotations
 
 import deezer.exceptions

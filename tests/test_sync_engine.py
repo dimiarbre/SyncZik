@@ -1,8 +1,9 @@
 from unittest.mock import MagicMock
-from pathlib import Path
 
 import pytest
-from SyncZik.syncer import Artist, Song, Playlist
+
+import SyncZik.snapshot_handler as sh
+from SyncZik.providers.base import ServiceProvider
 from SyncZik.sync_engine import (
     MergeResult,
     add_song,
@@ -13,13 +14,13 @@ from SyncZik.sync_engine import (
     sync,
     untrack_playlist,
 )
-from SyncZik.providers.base import ServiceProvider
+from SyncZik.syncer import Artist, Playlist, Song
 from SyncZik.utils import ServiceName
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def make_song(name="Track", id="id1") -> Song:
     return Song(name=name, artists=[Artist("Artist", "a1")], uri=f"spotify:track:{id}", id=id)
@@ -49,20 +50,23 @@ def make_provider(
 # Tests run in a temp dir so file I/O doesn't pollute the repo
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNCZIK_DATA_DIR", str(tmp_path / "xdg_data"))
 
 
 # ---------------------------------------------------------------------------
 # clone()
 # ---------------------------------------------------------------------------
 
+
 class TestClone:
     def test_creates_remote_playlist(self):
         songs = [make_song("A", "a"), make_song("B", "b")]
         provider = make_provider(songs, new_playlist_id="new123")
-        result = clone(provider, "user", "source_id", "My Clone")
+        clone(provider, "user", "source_id", "My Clone")
         provider.create_playlist.assert_called_once_with("user", "My Clone", "")
         provider.add_songs.assert_called_once()
         added = provider.add_songs.call_args[0][1]
@@ -80,17 +84,19 @@ class TestClone:
         songs = [make_song("A", "a")]
         provider = make_provider(songs, new_playlist_id="new123")
         clone(provider, "user", "source_id", "Clone")
-        assert Path("state/spotify/new123.json").exists()
-        assert list(Path("snapshots/spotify/new123").glob("*.json"))
+        assert (sh._data_dir() / "state/spotify/new123.json").exists()
+        assert list((sh._data_dir() / "snapshots/spotify/new123").glob("*.json"))
 
 
 # ---------------------------------------------------------------------------
 # sync() — merge logic
 # ---------------------------------------------------------------------------
 
+
 class TestSync:
     def _setup(self, baseline: list[Song], local: list[Song], remote: list[Song]):
         import SyncZik.snapshot_handler as sh
+
         playlist = make_playlist(local)
         sh.save_snapshot("spotify", playlist.service_id, baseline)
         sh.save_playlist_state(playlist)
@@ -145,6 +151,7 @@ class TestSync:
         a, b, c, d = (make_song(x, x) for x in "abcd")
         playlist = make_playlist([a, b])  # c was removed locally
         import SyncZik.snapshot_handler as sh
+
         sh.save_snapshot("spotify", playlist.service_id, [a, b, c])
         sh.save_playlist_state(playlist)
         provider = make_provider([a, b, c, d])
@@ -160,6 +167,7 @@ class TestSync:
         a, b = make_song("A", "a"), make_song("B", "b")
         playlist = make_playlist([a])  # b removed locally
         import SyncZik.snapshot_handler as sh
+
         sh.save_snapshot("spotify", playlist.service_id, [a, b])
         sh.save_playlist_state(playlist)
         provider = make_provider([a])  # b also removed remotely
@@ -173,6 +181,7 @@ class TestSync:
 # add_song / remove_song (staging)
 # ---------------------------------------------------------------------------
 
+
 class TestStaging:
     def test_add_song_persists(self, tmp_path):
         p = make_playlist([make_song("A", "a")])
@@ -180,7 +189,7 @@ class TestStaging:
         result = add_song(p, b)
         assert result is True
         assert b in p.songs
-        assert Path("state/spotify/pl1.json").exists()
+        assert (sh._data_dir() / "state/spotify/pl1.json").exists()
 
     def test_add_song_no_duplicate(self):
         a = make_song("A", "a")
@@ -203,6 +212,7 @@ class TestStaging:
 # apply_remote_removal
 # ---------------------------------------------------------------------------
 
+
 class TestApplyRemoteRemoval:
     def test_removes_songs_from_local(self):
         a, b = make_song("A", "a"), make_song("B", "b")
@@ -224,16 +234,18 @@ class TestApplyRemoteRemoval:
         p = make_playlist([a, b])
         provider = make_provider([a])
         apply_remote_removal(provider, p, [b])
-        assert Path("state/spotify/pl1.json").exists()
+        assert (sh._data_dir() / "state/spotify/pl1.json").exists()
 
 
 # ---------------------------------------------------------------------------
 # sync() — additional edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestSyncEdgeCases:
     def _setup(self, baseline, local, remote):
         import SyncZik.snapshot_handler as sh
+
         playlist = make_playlist(local)
         sh.save_snapshot("spotify", playlist.service_id, baseline)
         sh.save_playlist_state(playlist)
@@ -285,11 +297,12 @@ class TestSyncEdgeCases:
         provider = make_provider([], new_playlist_id="empty_clone")
         p = clone(provider, "user", "source_id", "Empty Clone")
         assert p.songs == []
-        assert Path("state/spotify/empty_clone.json").exists()
+        assert (sh._data_dir() / "state/spotify/empty_clone.json").exists()
 
     def test_sync_updates_last_synced_timestamp(self):
         songs = [make_song("A", "a")]
         import SyncZik.snapshot_handler as sh
+
         playlist = make_playlist(songs)
         sh.save_snapshot("spotify", playlist.service_id, songs)
         sh.save_playlist_state(playlist)
@@ -304,9 +317,11 @@ class TestSyncEdgeCases:
 # sync() — order-preserving pulls, partial-failure resilience, fetch count
 # ---------------------------------------------------------------------------
 
+
 class TestSyncResilience:
     def _setup(self, baseline, local, remote):
         import SyncZik.snapshot_handler as sh
+
         playlist = make_playlist(local)
         sh.save_snapshot("spotify", playlist.service_id, baseline)
         sh.save_playlist_state(playlist)
@@ -334,6 +349,7 @@ class TestSyncResilience:
         assert result.errors
         assert b not in result.pushed_to_remote
         import SyncZik.snapshot_handler as sh
+
         baseline_after = sh.load_snapshot("spotify", playlist.service_id)
         assert {s.id for s in baseline_after} == {"a"}  # unchanged, b never confirmed
 
@@ -349,6 +365,7 @@ class TestSyncResilience:
         assert result.errors
         assert b not in result.removed_from_remote
         import SyncZik.snapshot_handler as sh
+
         baseline_after = sh.load_snapshot("spotify", playlist.service_id)
         assert {s.id for s in baseline_after} == {"a", "b"}  # unchanged, removal never confirmed
 
@@ -385,12 +402,14 @@ class TestSyncResilience:
 # rename_playlist / untrack_playlist
 # ---------------------------------------------------------------------------
 
+
 class TestRenamePlaylist:
     def test_renames_and_persists(self):
         p = make_playlist([make_song()])
         rename_playlist(p, "New Name")
         assert p.name == "New Name"
         import SyncZik.snapshot_handler as sh
+
         loaded = sh.load_playlist_state("spotify", p.service_id)
         assert loaded.name == "New Name"
 
@@ -398,6 +417,7 @@ class TestRenamePlaylist:
 class TestUntrackPlaylist:
     def test_removes_local_state(self):
         import SyncZik.snapshot_handler as sh
+
         p = make_playlist([make_song()])
         sh.save_playlist_state(p)
         untrack_playlist(p)
@@ -405,6 +425,7 @@ class TestUntrackPlaylist:
 
     def test_removes_snapshot_history(self):
         import SyncZik.snapshot_handler as sh
+
         p = make_playlist([make_song()])
         sh.save_snapshot("spotify", p.service_id, p.songs)
         untrack_playlist(p)

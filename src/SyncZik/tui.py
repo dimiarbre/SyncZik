@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from typing import Callable, Literal, TypeVar
+from typing import Literal
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -30,12 +30,12 @@ from textual.worker import WorkerFailed
 from .auth import get_deezer_client, get_spotify_client
 from .config import SPOTIFY_USER_ID
 from .cross_platform import ExportPlan, MatchKind, SongConflict, execute_export, plan_export
+from .logging_setup import log_path
 from .playlist_git import (
     LogEntry,
     PlaylistDiff,
     cherry_pick,
     diff,
-    fork_from_user,
     log,
     revert,
     songs_in_playlist,
@@ -43,7 +43,6 @@ from .playlist_git import (
 from .providers.base import ServiceProvider
 from .providers.deezer import DeezerProvider
 from .providers.spotify import SpotifyProvider
-from .utils import ServiceName
 from .snapshot_handler import list_playlists, save_playlist_state
 from .sync_engine import (
     MergeResult,
@@ -55,16 +54,16 @@ from .sync_engine import (
     sync,
     untrack_playlist,
 )
-from .logging_setup import log_path
 from .syncer import Playlist, Song
+from .utils import ServiceName
 
-T = TypeVar("T")
 _logger = logging.getLogger("SyncZik")
 
 
 # ---------------------------------------------------------------------------
 # Provider helpers
 # ---------------------------------------------------------------------------
+
 
 def build_provider(choice: ServiceName) -> ServiceProvider:
     """Connect to the chosen platform and wrap it as a ServiceProvider.
@@ -94,7 +93,8 @@ def resolve_clone_user_id(provider: ServiceProvider) -> str | None:
 # Async helpers — keep the UI responsive during provider network calls
 # ---------------------------------------------------------------------------
 
-async def run_blocking(node: DOMNode, fn: Callable[[], T]) -> T:
+
+async def run_blocking[T](node: DOMNode, fn: Callable[[], T]) -> T:
     """Run a blocking provider call in a worker thread so it doesn't freeze the UI.
 
     Re-raises the original exception (not WorkerFailed) so callers can keep
@@ -123,6 +123,7 @@ async def loading(*widgets: Widget) -> AsyncIterator[None]:
 # ---------------------------------------------------------------------------
 # Modal screens
 # ---------------------------------------------------------------------------
+
 
 class InputModal(ModalScreen[str | None]):
     """Single-line text input dialog."""
@@ -337,6 +338,7 @@ class SyncResultModal(ModalScreen[list[Song]]):
 # Cherry-pick modal
 # ---------------------------------------------------------------------------
 
+
 class CherryPickModal(ModalScreen[list[Song]]):
     """Browse a remote playlist, show songs not in the target, let user pick."""
 
@@ -439,6 +441,7 @@ class CherryPickModal(ModalScreen[list[Song]]):
 # Export conflict resolver
 # ---------------------------------------------------------------------------
 
+
 class ExportConflictScreen(ModalScreen[list[Song]]):
     """Walk the user through resolving each cross-platform export conflict.
 
@@ -495,10 +498,7 @@ class ExportConflictScreen(ModalScreen[list[Song]]):
         artist = src.artists[0].name if src.artists else "?"
         kind_label = "Not found on target" if self._current.kind == MatchKind.NOT_FOUND else "Ambiguous match"
         info = self.query_one("#conflict-info", Static)
-        info.update(
-            f"[yellow]{kind_label}[/yellow]\n"
-            f"[bold]{src.name}[/bold]  —  {artist}"
-        )
+        info.update(f"[yellow]{kind_label}[/yellow]\n[bold]{src.name}[/bold]  —  {artist}")
 
         lv = self.query_one("#conflict-candidates", ListView)
         lv.clear()
@@ -544,6 +544,7 @@ class ExportConflictScreen(ModalScreen[list[Song]]):
 # ---------------------------------------------------------------------------
 # Playlist picker (used by Diff) and diff result
 # ---------------------------------------------------------------------------
+
 
 class PlaylistPickerModal(ModalScreen[Playlist | None]):
     """Let the user pick one of several already-tracked playlists."""
@@ -687,6 +688,7 @@ class HelpModal(ModalScreen[None]):
 # Confirm (used by Untrack) and History (log + revert)
 # ---------------------------------------------------------------------------
 
+
 class ConfirmModal(ModalScreen[bool]):
     """Generic Yes/Cancel confirmation dialog."""
 
@@ -730,9 +732,7 @@ class HistoryModal(ModalScreen[bool]):
         with Vertical(id="dialog"):
             yield Label(f'History: "{self._playlist.name}"', id="dialog-title")
             if not self._entries:
-                yield Static(
-                    "No recorded history yet — Clone or Sync to start one.", id="history-empty"
-                )
+                yield Static("No recorded history yet — Clone or Sync to start one.", id="history-empty")
             else:
                 yield ListView(id="history-list")
             with Horizontal(id="dialog-buttons"):
@@ -997,9 +997,7 @@ class SyncZikApp(App):
                 self._provider = build_provider("spotify")
             self._refresh_playlist_tree()
 
-        self.push_screen(
-            ProviderPickerModal(title="Choose your home provider"), on_choice
-        )
+        self.push_screen(ProviderPickerModal(title="Choose your home provider"), on_choice)
 
     # ------------------------------------------------------------------
     # Playlist tree
@@ -1039,6 +1037,7 @@ class SyncZikApp(App):
         table = self.query_one("#song-table", DataTable)
         table.clear()
         from .snapshot_handler import load_snapshot
+
         baseline_ids = {s.id for s in load_snapshot(playlist.service, playlist.service_id)}
         for song in playlist.songs:
             artist = song.artists[0].name if song.artists else "—"
@@ -1091,7 +1090,8 @@ class SyncZikApp(App):
             except Exception as e:
                 self.notify(f"Error: {e}", severity="error")
                 return
-            from .snapshot_handler import save_playlist_state, save_snapshot
+            from .snapshot_handler import save_snapshot
+
             save_snapshot(playlist.service, playlist.service_id, playlist.songs)
             save_playlist_state(playlist)
             self._refresh_playlist_tree()
@@ -1099,9 +1099,7 @@ class SyncZikApp(App):
             self.notify(f'Loaded "{playlist.name}"')
 
         provider_label = "Deezer" if self._provider and self._provider.service_name == "deezer" else "Spotify"
-        self.push_screen(
-            InputModal("Load playlist", f"{provider_label} playlist URL or ID"), on_result
-        )
+        self.push_screen(InputModal("Load playlist", f"{provider_label} playlist URL or ID"), on_result)
 
     def action_clone_playlist(self) -> None:
         if self._selected is None:
@@ -1172,7 +1170,9 @@ class SyncZikApp(App):
             self._refresh_playlist_tree()
             self._show_songs(self._selected)
 
-        self.push_screen(SyncResultModal(result), on_result)
+        # Textual's stub wants Callable[[T | None], ...]; our modals never
+        # dismiss with None, so the narrower callback type is intentional.
+        self.push_screen(SyncResultModal(result), on_result)  # type: ignore[arg-type]
 
     def action_add_song(self) -> None:
         if self._selected is None:
@@ -1228,7 +1228,7 @@ class SyncZikApp(App):
             else:
                 self.notify("All selected songs already in playlist.", severity="warning")
 
-        self.push_screen(CherryPickModal(self._provider, self._selected), on_result)
+        self.push_screen(CherryPickModal(self._provider, self._selected), on_result)  # type: ignore[arg-type]
 
     def action_export_playlist(self) -> None:
         """Export the current playlist to another platform, resolving conflicts via GUI."""
@@ -1275,7 +1275,10 @@ class SyncZikApp(App):
                             await run_blocking(
                                 self,
                                 lambda: execute_export(
-                                    target_provider, user_id, export_name, songs,
+                                    target_provider,
+                                    user_id,
+                                    export_name,
+                                    songs,
                                     description=f"Exported from {selected_name} — managed by SyncZik",
                                 ),
                             )
@@ -1290,7 +1293,10 @@ class SyncZikApp(App):
                             await run_blocking(
                                 self,
                                 lambda: execute_export(
-                                    target_provider, user_id, export_name, resolved_songs,
+                                    target_provider,
+                                    user_id,
+                                    export_name,
+                                    resolved_songs,
                                     description=f"Exported from {selected_name} — managed by SyncZik",
                                 ),
                             )
@@ -1302,7 +1308,7 @@ class SyncZikApp(App):
                     except Exception as e:
                         self.notify(f"Export error: {e}", severity="error")
 
-                self.push_screen(ExportConflictScreen(export_plan, target_provider), on_resolved)
+                self.push_screen(ExportConflictScreen(export_plan, target_provider), on_resolved)  # type: ignore[arg-type]
 
             self.push_screen(
                 InputModal("Export playlist", f'Name for the export of "{selected_name}"'),
@@ -1317,7 +1323,8 @@ class SyncZikApp(App):
             return
         selected = self._selected
         others = [
-            p for p in self._playlists
+            p
+            for p in self._playlists
             if not (p.service == selected.service and p.service_id == selected.service_id)
         ]
         if not others:
@@ -1330,9 +1337,7 @@ class SyncZikApp(App):
             result = diff(selected, other)
             self.push_screen(DiffResultModal(selected, other, result))
 
-        self.push_screen(
-            PlaylistPickerModal(others, title=f'Diff "{selected.name}" against…'), on_picked
-        )
+        self.push_screen(PlaylistPickerModal(others, title=f'Diff "{selected.name}" against…'), on_picked)
 
     def action_undo(self) -> None:
         if self._last_action is None:
@@ -1363,7 +1368,7 @@ class SyncZikApp(App):
                 self._show_songs(selected)
                 self.notify("Reverted local state to the selected point in history.")
 
-        self.push_screen(HistoryModal(selected, entries), on_result)
+        self.push_screen(HistoryModal(selected, entries), on_result)  # type: ignore[arg-type]
 
     def action_rename_playlist(self) -> None:
         if self._selected is None:
@@ -1378,9 +1383,7 @@ class SyncZikApp(App):
             self._refresh_playlist_tree()
             self.notify(f'Renamed to "{new_name}"')
 
-        self.push_screen(
-            InputModal("Rename playlist", f'New name for "{selected.name}"'), on_result
-        )
+        self.push_screen(InputModal("Rename playlist", f'New name for "{selected.name}"'), on_result)
 
     def action_untrack_playlist(self) -> None:
         if self._selected is None:
@@ -1404,7 +1407,7 @@ class SyncZikApp(App):
                 f'Stop tracking "{selected.name}" locally? This removes its local state '
                 "and history but does NOT delete it from the remote service.",
             ),
-            on_result,
+            on_result,  # type: ignore[arg-type]
         )
 
     def action_show_help(self) -> None:
@@ -1413,7 +1416,10 @@ class SyncZikApp(App):
 
 def run() -> None:
     from .logging_setup import setup_logging
+    from .snapshot_handler import migrate_legacy_storage
+
     setup_logging()  # no-op if the CLI entry point already set this up
+    migrate_legacy_storage()  # likewise, in case the TUI is launched directly
     SyncZikApp().run()
 
 

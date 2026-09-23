@@ -9,13 +9,15 @@ from .config import (
     SPOTIFY_REDIRECT_URI,
 )
 
-_SCOPES = " ".join([
-    "playlist-modify-public",
-    "playlist-modify-private",
-    "playlist-read-private",
-    "playlist-read-collaborative",
-    "user-library-read",
-])
+_SCOPES = " ".join(
+    [
+        "playlist-modify-public",
+        "playlist-modify-private",
+        "playlist-read-private",
+        "playlist-read-collaborative",
+        "user-library-read",
+    ]
+)
 
 _spotify_client: spotipy.Spotify | None = None
 
@@ -29,7 +31,8 @@ def get_spotify_client() -> spotipy.Spotify:
     global _spotify_client
     if _spotify_client is None:
         missing = [
-            name for name, value in (
+            name
+            for name, value in (
                 ("SPOTIFY_CLIENT_ID", SPOTIFY_CLIENT_ID),
                 ("SPOTIFY_CLIENT_SECRET", SPOTIFY_CLIENT_SECRET),
             )
@@ -37,8 +40,9 @@ def get_spotify_client() -> spotipy.Spotify:
         ]
         if missing:
             raise RuntimeError(
-                "Missing required .env variable(s) for Spotify: " + ", ".join(missing) +
-                ". Copy .env.example to .env and fill it in — see README's Setup section."
+                "Missing required .env variable(s) for Spotify: "
+                + ", ".join(missing)
+                + ". Copy .env.example to .env and fill it in — see README's Setup section."
             )
         auth_manager = SpotifyOAuth(
             client_id=SPOTIFY_CLIENT_ID,
@@ -67,8 +71,7 @@ def get_deezer_client() -> deezer.Client:
     if _deezer_client is None:
         if not DEEZER_ACCESS_TOKEN:
             raise RuntimeError(
-                "DEEZER_ACCESS_TOKEN not set in .env. "
-                "See README for how to obtain a Deezer access token."
+                "DEEZER_ACCESS_TOKEN not set in .env. See README for how to obtain a Deezer access token."
             )
         _deezer_client = deezer.Client(access_token=DEEZER_ACCESS_TOKEN)
     return _deezer_client

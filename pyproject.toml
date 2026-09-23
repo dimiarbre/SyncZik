@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "SyncZik"
+version = "0.1.0"
+description = "Git for playlists — fork, sync, cherry-pick, and export playlists across streaming platforms."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Dimitri Lerévérend" }]
+classifiers = [
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+]
+dependencies = [
+    "spotipy",
+    "deezer-python",
+    "httpx",
+    "platformdirs",
+    "python-dotenv",
+    "setuptools",
+    "textual",
+]
+
+[project.urls]
+Homepage = "https://github.com/dimiarbre/SyncZik"
+Repository = "https://github.com/dimiarbre/SyncZik"
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "mypy", "ruff"]
+
+[project.scripts]
+syncZik = "SyncZik.SyncZik:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.mypy]
+mypy_path = "src/SyncZik"
+
+[[tool.mypy.overrides]]
+module = ["spotipy.*", "deezer.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

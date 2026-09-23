@@ -1,11 +1,12 @@
 """Git-like operations on playlists: diff, cherry-pick, fork-from-user, log, revert."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from .providers.base import ServiceProvider
-from .snapshot_handler import list_snapshot_versions, save_playlist_state, save_snapshot
+from .snapshot_handler import list_snapshot_versions, save_playlist_state
 from .sync_engine import clone
 from .syncer import Playlist, Song
 
@@ -13,6 +14,7 @@ from .syncer import Playlist, Song
 @dataclass
 class PlaylistDiff:
     """Symmetric difference between two playlists."""
+
     only_in_left: list[Song] = field(default_factory=list)
     only_in_right: list[Song] = field(default_factory=list)
     in_both: list[Song] = field(default_factory=list)
@@ -82,6 +84,7 @@ def songs_in_playlist(
 @dataclass
 class LogEntry:
     """What changed at one recorded snapshot point (each clone/sync creates one)."""
+
     timestamp: datetime
     added: list[Song] = field(default_factory=list)
     removed: list[Song] = field(default_factory=list)
@@ -102,12 +105,14 @@ def log(service: str, playlist_id: str) -> list[LogEntry]:
         current_by_id = {s.id: s for s in version.songs}
         added = [current_by_id[sid] for sid in current_by_id.keys() - previous_by_id.keys()]
         removed = [previous_by_id[sid] for sid in previous_by_id.keys() - current_by_id.keys()]
-        entries.append(LogEntry(
-            timestamp=version.timestamp,
-            added=added,
-            removed=removed,
-            total_songs=len(version.songs),
-        ))
+        entries.append(
+            LogEntry(
+                timestamp=version.timestamp,
+                added=added,
+                removed=removed,
+                total_songs=len(version.songs),
+            )
+        )
         previous_by_id = current_by_id
     entries.reverse()  # newest first
     return entries

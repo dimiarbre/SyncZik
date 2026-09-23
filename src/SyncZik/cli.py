@@ -5,11 +5,12 @@ don't need an interactive terminal. `run_cli()` returns None when the user
 passed no subcommand (the caller should launch the TUI in that case), or an
 exit code once a subcommand has run.
 """
+
 from __future__ import annotations
 
 import argparse
 import sys
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from .auth import get_deezer_client, get_spotify_client
 from .config import SPOTIFY_USER_ID
@@ -19,7 +20,7 @@ from .playlist_git import cherry_pick, songs_in_playlist
 from .providers.base import ServiceProvider
 from .providers.deezer import DeezerProvider
 from .providers.spotify import SpotifyProvider
-from .snapshot_handler import list_playlists
+from .snapshot_handler import list_playlists, migrate_legacy_storage
 from .sync_engine import clone as clone_playlist
 from .sync_engine import sync as sync_playlist
 from .syncer import Playlist
@@ -48,9 +49,10 @@ def _resolve_user_id(provider: ServiceProvider) -> str:
     return ""
 
 
-def _find_tracked_playlist(playlist_id: str, service: Optional[ServiceName]) -> Playlist:
+def _find_tracked_playlist(playlist_id: str, service: ServiceName | None) -> Playlist:
     matches = [
-        p for p in list_playlists()
+        p
+        for p in list_playlists()
         if p.service_id == playlist_id and (service is None or p.service == service)
     ]
     if not matches:
@@ -69,12 +71,15 @@ def _find_tracked_playlist(playlist_id: str, service: Optional[ServiceName]) -> 
 # Subcommands
 # ---------------------------------------------------------------------------
 
+
 def cmd_clone(args: argparse.Namespace) -> int:
     provider = _build_provider(args.service)
     user_id = _resolve_user_id(provider)
     source_id = _extract_id(args.source)
     playlist = clone_playlist(provider, user_id, source_id, args.name, description=args.description)
-    print(f'Cloned "{playlist.name}" ({len(playlist.songs)} songs) -> {playlist.service}:{playlist.service_id}')
+    print(
+        f'Cloned "{playlist.name}" ({len(playlist.songs)} songs) -> {playlist.service}:{playlist.service_id}'
+    )
     return 0
 
 
@@ -113,8 +118,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             parts.append(f"pulled {len(result.added_from_remote)}")
         if result.removed_from_remote_pending:
             parts.append(
-                f"{len(result.removed_from_remote_pending)} pending remote removal(s) "
-                "(resolve with the TUI)"
+                f"{len(result.removed_from_remote_pending)} pending remote removal(s) (resolve with the TUI)"
             )
         print(f'"{playlist.name}": {", ".join(parts) if parts else "up to date"}')
     return exit_code
@@ -137,7 +141,10 @@ def cmd_export(args: argparse.Namespace) -> int:
     plan = plan_export(source.songs, target_provider)
     songs = [target for _, target in plan.auto_resolved]
     playlist_id = execute_export(
-        target_provider, user_id, args.name, songs,
+        target_provider,
+        user_id,
+        args.name,
+        songs,
         description=f"Exported from {source.name} — managed by SyncZik",
     )
     skipped = plan.total() - len(songs)
@@ -151,11 +158,10 @@ def cmd_export(args: argparse.Namespace) -> int:
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="syncZik", description="Git for playlists.")
-    parser.add_argument(
-        "--verbose", action="store_true", help="Enable debug-level logging to the log file."
-    )
+    parser.add_argument("--verbose", action="store_true", help="Enable debug-level logging to the log file.")
     subparsers = parser.add_subparsers(dest="command")
 
     clone_p = subparsers.add_parser("clone", help="Fork a playlist and track it locally.")
@@ -168,7 +174,9 @@ def build_parser() -> argparse.ArgumentParser:
     sync_p = subparsers.add_parser("sync", help="Bidirectionally sync one or all tracked playlists.")
     sync_p.add_argument("playlist_id", nargs="?", help="Tracked playlist id to sync.")
     sync_p.add_argument(
-        "--service", choices=["spotify", "deezer"], default=None,
+        "--service",
+        choices=["spotify", "deezer"],
+        default=None,
         help="Disambiguate playlist_id if it's tracked on more than one service.",
     )
     sync_p.add_argument("--all", action="store_true", help="Sync every tracked playlist.")
@@ -180,7 +188,9 @@ def build_parser() -> argparse.ArgumentParser:
     pick_p.add_argument("target", help="Tracked target playlist id.")
     pick_p.add_argument("source", help="Source playlist URL or ID to pull songs from.")
     pick_p.add_argument(
-        "--service", choices=["spotify", "deezer"], default=None,
+        "--service",
+        choices=["spotify", "deezer"],
+        default=None,
         help="Disambiguate target if it's tracked on more than one service.",
     )
     pick_p.set_defaults(func=cmd_cherry_pick)
@@ -190,7 +200,9 @@ def build_parser() -> argparse.ArgumentParser:
     export_p.add_argument("target_service", choices=["spotify", "deezer"], help="Platform to export to.")
     export_p.add_argument("name", help="Name for the exported playlist.")
     export_p.add_argument(
-        "--service", choices=["spotify", "deezer"], default=None,
+        "--service",
+        choices=["spotify", "deezer"],
+        default=None,
         help="Disambiguate source if it's tracked on more than one service.",
     )
     export_p.set_defaults(func=cmd_export)
@@ -198,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_cli(argv: Optional[Sequence[str]] = None) -> Optional[int]:
+def run_cli(argv: Sequence[str] | None = None) -> int | None:
     """Parse argv and dispatch a subcommand.
 
     Returns None if no subcommand was given (caller should launch the TUI
@@ -206,6 +218,12 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> Optional[int]:
     """
     args = build_parser().parse_args(argv)
     setup_logging(verbose=args.verbose)
+    if migrate_legacy_storage():
+        print(
+            "Migrated state/ and snapshots/ from the current directory into "
+            "the new data directory (the originals were left in place).",
+            file=sys.stderr,
+        )
     if not getattr(args, "command", None):
         return None
     try:

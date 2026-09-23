@@ -10,10 +10,18 @@ source venv-python3.12-SyncZik/bin/activate
 pip install -e ".[dev]"
 ```
 
-Run tests:
+Run tests, lint, and type checks (also runs in CI):
 
 ```bash
 pytest
+ruff check . && ruff format --check .
+mypy src/SyncZik
+```
+
+Optionally, install the pre-commit hook so `ruff` runs automatically:
+
+```bash
+pre-commit install
 ```
 
 ## Branch workflow
@@ -29,22 +37,23 @@ git merge feature/my-feature
 
 ## Code style
 
-- Python 3.12+, no third-party formatter required — just keep it readable.
+- Python 3.12+. `ruff` handles formatting and lint (`ruff format`, `ruff check .`) — run it (or install the pre-commit hook) rather than hand-formatting.
 - All intra-package imports must be **relative** (`from .syncer import Song`, not `from syncer import Song`). Bare module names break when the package is properly installed.
-- No `sys.path.insert` in source or test files. The `setup.cfg` `pythonpath = src` directive handles test resolution.
+- No `sys.path.insert` in source or test files. `pyproject.toml`'s `[tool.pytest.ini_options] pythonpath` directive handles test resolution.
 - No comments that describe *what* the code does — only comments that explain *why* (non-obvious constraints, workarounds, subtle invariants).
 
 ## Adding a new streaming provider
 
 1. Create `src/SyncZik/providers/<service>.py`.
 2. Implement all methods of `ServiceProvider` (see `providers/base.py`).
-3. The service name returned by `service_name` is used as the subdirectory key in `state/` and `snapshots/`.
+3. The service name returned by `service_name` is used as the subdirectory key under `state/` and `snapshots/` in the data directory (see `snapshot_handler._data_dir()` — an XDG-compliant dir via `platformdirs`, not repo-relative).
 4. Wire into the TUI: add an option to select the provider in `action_export_playlist` and `action_clone_playlist`.
-5. Add tests under `tests/` — use `unittest.mock.MagicMock(spec=ServiceProvider)` as the pattern.
+5. Wire into the CLI too: `cli._build_provider()`.
+6. Add tests under `tests/` — use `unittest.mock.MagicMock(spec=ServiceProvider)` as the pattern.
 
 ## Testing
 
-All tests are pure unit tests — no API calls. Use `MagicMock(spec=ServiceProvider)` to mock providers. Tests run in a `tmp_path`-based working directory (`monkeypatch.chdir(tmp_path)`) so file I/O never touches the repo.
+All tests are pure unit tests — no API calls. Use `MagicMock(spec=ServiceProvider)` to mock providers. Tests run in a `tmp_path`-based working directory with an isolated data dir, so file I/O never touches the repo or your real SyncZik data:
 
 ```python
 # Pattern for a new test file
@@ -52,9 +61,11 @@ import pytest
 from unittest.mock import MagicMock
 from SyncZik.providers.base import ServiceProvider
 
+
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNCZIK_DATA_DIR", str(tmp_path / "xdg_data"))
 ```
 
 Integration tests (hitting real APIs) go in `tests/integration/` and must be decorated with `@pytest.mark.integration`. They are skipped in CI unless credentials are present.
@@ -69,8 +80,8 @@ The export pipeline lives in `cross_platform.py`. When adding a new platform:
 
 ## Filing issues
 
-Please include:
+Please use the bug report template and include:
 - Python version (`python --version`)
 - The exact command or TUI action that failed
-- The full traceback if applicable
+- The full traceback if applicable, or the relevant excerpt from the debug log (path shown in the TUI's Help screen, `?`)
 - Which platform (Spotify / Deezer) was involved

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from .utils import ServiceName
 
@@ -34,10 +33,10 @@ class Song:
         artists: list[Artist],
         uri: str,
         id: str,
-        album: Optional[str] = None,
-        duration_ms: Optional[int] = None,
-        isrc: Optional[str] = None,
-        added_at: Optional[str] = None,
+        album: str | None = None,
+        duration_ms: int | None = None,
+        isrc: str | None = None,
+        added_at: str | None = None,
     ):
         self.name = name
         self.artists = artists
@@ -89,9 +88,9 @@ class Playlist:
         service_id: str,
         name: str,
         owner: str,
-        parent_id: Optional[str] = None,
-        parent_service: Optional[ServiceName] = None,
-        last_synced: Optional[datetime] = None,
+        parent_id: str | None = None,
+        parent_service: ServiceName | None = None,
+        last_synced: datetime | None = None,
     ):
         self.service = service
         self.service_id = service_id
