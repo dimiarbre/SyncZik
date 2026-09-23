@@ -21,6 +21,7 @@ class MergeResult:
     removed_from_remote_pending: list[Song] = field(default_factory=list)
     pushed_to_remote: list[Song] = field(default_factory=list)
     removed_from_remote: list[Song] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
     def is_clean(self) -> bool:
         return not (
@@ -28,6 +29,7 @@ class MergeResult:
             or self.removed_from_remote_pending
             or self.pushed_to_remote
             or self.removed_from_remote
+            or self.errors
         )
 
 
@@ -101,10 +103,13 @@ def sync(provider: ServiceProvider, playlist: Playlist) -> MergeResult:
     local_removed_ids = baseline_ids - local_ids
 
     # --- Remote additions → pull into local (skip if already added locally) ---
-    for sid in remote_added_ids - local_removed_ids - local_added_ids:
-        song = remote_by_id[sid]
-        playlist.add_song(song)
-        result.added_from_remote.append(song)
+    # Iterate remote_songs (not the set) so newly-pulled songs land in the
+    # order the remote actually returned them, instead of arbitrary set order.
+    to_pull_ids = remote_added_ids - local_removed_ids - local_added_ids
+    for song in remote_songs:
+        if song.id in to_pull_ids:
+            playlist.add_song(song)
+            result.added_from_remote.append(song)
 
     # --- Remote removals not also removed locally → prompt user ---
     for sid in remote_removed_ids - local_removed_ids:
@@ -116,8 +121,11 @@ def sync(provider: ServiceProvider, playlist: Playlist) -> MergeResult:
         for sid in local_added_ids - remote_added_ids
     ]
     if to_push:
-        provider.add_songs(playlist.service_id, to_push)
-        result.pushed_to_remote.extend(to_push)
+        try:
+            provider.add_songs(playlist.service_id, to_push)
+            result.pushed_to_remote.extend(to_push)
+        except Exception as exc:
+            result.errors.append(f"Failed to push {len(to_push)} song(s) to remote: {exc}")
 
     # --- Local removals → remove from remote ---
     to_remove_remote = [
@@ -126,14 +134,26 @@ def sync(provider: ServiceProvider, playlist: Playlist) -> MergeResult:
         if sid in baseline_by_id
     ]
     if to_remove_remote:
-        provider.remove_songs(playlist.service_id, to_remove_remote)
-        result.removed_from_remote.extend(to_remove_remote)
+        try:
+            provider.remove_songs(playlist.service_id, to_remove_remote)
+            result.removed_from_remote.extend(to_remove_remote)
+        except Exception as exc:
+            result.errors.append(f"Failed to remove {len(to_remove_remote)} song(s) from remote: {exc}")
 
-    # Persist updated state and new baseline (remote is now the new truth)
-    new_baseline = provider.fetch_songs(playlist.service_id)
-    playlist.last_synced = datetime.now(tz=timezone.utc)
-    save_snapshot(playlist.service, playlist.service_id, new_baseline)
-    playlist.songs = new_baseline
+    # Persist updated state and new baseline (remote is now the new truth).
+    # Only re-baseline when nothing above failed — otherwise the new snapshot
+    # would mark a push/removal that never actually landed as "in sync", and
+    # the next sync would never retry it. Skip the extra remote read entirely
+    # when nothing was pushed/removed: remote_songs (already fetched above)
+    # is still an accurate baseline in that case.
+    if not result.errors:
+        if to_push or to_remove_remote:
+            new_baseline = provider.fetch_songs(playlist.service_id)
+        else:
+            new_baseline = remote_songs
+        playlist.last_synced = datetime.now(tz=timezone.utc)
+        save_snapshot(playlist.service, playlist.service_id, new_baseline)
+        playlist.songs = new_baseline
     save_playlist_state(playlist)
 
     return result

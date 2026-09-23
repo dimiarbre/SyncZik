@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 
 import pytest
 from SyncZik.syncer import Artist, Song, Playlist
+import SyncZik.snapshot_handler as sh
 from SyncZik.snapshot_handler import (
     save_snapshot,
     load_snapshot,
@@ -88,6 +90,52 @@ class TestSnapshotRoundTrip:
         save_snapshot("spotify", "pl1", [song])
         loaded = load_snapshot("spotify", "pl1")[0]
         assert loaded.name == "Café de Flore (Remixé)"
+
+
+# ---------------------------------------------------------------------------
+# Atomic writes
+# ---------------------------------------------------------------------------
+
+class TestAtomicWrite:
+    def test_preserves_old_file_on_write_failure(self, monkeypatch):
+        save_snapshot("spotify", "pl1", [make_song("Old", "old")])
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(sh.json, "dump", boom)
+        with pytest.raises(RuntimeError):
+            save_snapshot("spotify", "pl1", [make_song("New", "new")])
+
+        loaded = load_snapshot("spotify", "pl1")
+        assert loaded[0].id == "old"
+
+    def test_no_leftover_tmp_file_after_successful_save(self):
+        save_snapshot("spotify", "pl1", [make_song()])
+        assert list(Path("snapshots/spotify").glob("*.tmp")) == []
+
+    def test_no_leftover_tmp_file_after_failed_save(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(sh.json, "dump", boom)
+        with pytest.raises(RuntimeError):
+            save_snapshot("spotify", "pl1", [make_song()])
+
+        assert list(Path("snapshots/spotify").glob("*.tmp")) == []
+
+    def test_playlist_state_write_is_also_atomic(self, monkeypatch):
+        save_playlist_state(make_playlist(songs=[make_song("Old", "old")]))
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(sh.json, "dump", boom)
+        with pytest.raises(RuntimeError):
+            save_playlist_state(make_playlist(songs=[make_song("New", "new")]))
+
+        loaded = load_playlist_state("spotify", "pl1")
+        assert loaded.songs[0].id == "old"
 
 
 # ---------------------------------------------------------------------------

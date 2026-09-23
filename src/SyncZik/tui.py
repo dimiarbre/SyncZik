@@ -177,6 +177,8 @@ class SyncResultModal(ModalScreen[list[Song]]):
             lines.append(f"[green]Removed {len(r.removed_from_remote)} song(s) from remote[/green]")
         if r.added_from_remote:
             lines.append(f"[green]Pulled {len(r.added_from_remote)} new song(s) from remote[/green]")
+        for err in r.errors:
+            lines.append(f"[red]{err}[/red]")
 
         with Vertical(id="dialog"):
             yield Label("Sync complete", id="dialog-title")

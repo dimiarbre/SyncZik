@@ -1,8 +1,26 @@
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 from .syncer import Playlist, Song
+
+
+def _atomic_write_json(path: Path, data: object) -> None:
+    """Write JSON atomically: dump to a sibling temp file, then rename into place.
+
+    Avoids leaving a truncated/corrupted file if the process crashes or is
+    killed mid-write.
+    """
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, path)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -17,8 +35,7 @@ def _snapshot_path(service: str, playlist_id: str) -> Path:
 
 def save_snapshot(service: str, playlist_id: str, songs: list[Song]) -> None:
     path = _snapshot_path(service, playlist_id)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump([s.to_dict() for s in songs], f, indent=2)
+    _atomic_write_json(path, [s.to_dict() for s in songs])
 
 
 def load_snapshot(service: str, playlist_id: str) -> list[Song]:
@@ -41,8 +58,7 @@ def _state_path(service: str, playlist_id: str) -> Path:
 
 def save_playlist_state(playlist: Playlist) -> None:
     path = _state_path(playlist.service, playlist.service_id)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(playlist.to_dict(), f, indent=2)
+    _atomic_write_json(path, playlist.to_dict())
 
 
 def load_playlist_state(service: str, playlist_id: str) -> Optional[Playlist]:
