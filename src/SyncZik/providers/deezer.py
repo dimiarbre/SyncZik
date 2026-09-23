@@ -1,8 +1,8 @@
 import deezer
 
-from .base import ServiceProvider, resilient_call
 from ..syncer import Artist, Playlist, Song
 from ..utils import ServiceName
+from .base import ServiceProvider, resilient_call
 
 # Deezer's playlist add/delete-tracks endpoints don't document an explicit
 # batch-size limit; chunk anyway (same size as Spotify's documented one) as a
@@ -87,12 +87,12 @@ class DeezerProvider(ServiceProvider):
         playlist = resilient_call(lambda: self._client.get_playlist(int(playlist_id)))
         ids = [int(s.id) for s in songs]
         for i in range(0, len(ids), _BATCH_SIZE):
-            batch = ids[i:i + _BATCH_SIZE]
+            batch = ids[i : i + _BATCH_SIZE]
             resilient_call(lambda: playlist.add_tracks(batch))
 
     def remove_songs(self, playlist_id: str, songs: list[Song]) -> None:
         playlist = resilient_call(lambda: self._client.get_playlist(int(playlist_id)))
         ids = [int(s.id) for s in songs]
         for i in range(0, len(ids), _BATCH_SIZE):
-            batch = ids[i:i + _BATCH_SIZE]
+            batch = ids[i : i + _BATCH_SIZE]
             resilient_call(lambda: playlist.delete_tracks(batch))

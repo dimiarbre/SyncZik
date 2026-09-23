@@ -52,6 +52,7 @@ import pytest
 from unittest.mock import MagicMock
 from SyncZik.providers.base import ServiceProvider
 
+
 @pytest.fixture(autouse=True)
 def tmp_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)

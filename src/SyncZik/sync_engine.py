@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .providers.base import ServiceProvider
 from .snapshot_handler import (
     delete_playlist,
-    list_playlists,
     load_snapshot,
-    load_playlist_state,
     save_playlist_state,
     save_snapshot,
 )
@@ -18,6 +16,7 @@ from .syncer import Playlist, Song
 @dataclass
 class MergeResult:
     """Summary of what happened during a sync operation."""
+
     added_from_remote: list[Song] = field(default_factory=list)
     removed_from_remote_pending: list[Song] = field(default_factory=list)
     pushed_to_remote: list[Song] = field(default_factory=list)
@@ -47,6 +46,7 @@ def _songs_by_id(songs: list[Song]) -> dict[str, Song]:
 # Core operations
 # ---------------------------------------------------------------------------
 
+
 def clone(
     provider: ServiceProvider,
     user_id: str,
@@ -67,7 +67,7 @@ def clone(
         owner=user_id,
         parent_id=source_playlist_id,
         parent_service=provider.service_name,
-        last_synced=datetime.now(tz=timezone.utc),
+        last_synced=datetime.now(tz=UTC),
     )
     clone_playlist.songs = list(source.songs)
 
@@ -95,7 +95,6 @@ def sync(provider: ServiceProvider, playlist: Playlist) -> MergeResult:
     baseline_ids = _song_set(baseline_songs)
     local_ids = _song_set(local_songs)
 
-    remote_by_id = _songs_by_id(remote_songs)
     baseline_by_id = _songs_by_id(baseline_songs)
 
     remote_added_ids = remote_ids - baseline_ids
@@ -117,10 +116,7 @@ def sync(provider: ServiceProvider, playlist: Playlist) -> MergeResult:
         result.removed_from_remote_pending.append(baseline_by_id[sid])
 
     # --- Local additions → push to remote ---
-    to_push = [
-        _songs_by_id(local_songs)[sid]
-        for sid in local_added_ids - remote_added_ids
-    ]
+    to_push = [_songs_by_id(local_songs)[sid] for sid in local_added_ids - remote_added_ids]
     if to_push:
         try:
             provider.add_songs(playlist.service_id, to_push)
@@ -130,9 +126,7 @@ def sync(provider: ServiceProvider, playlist: Playlist) -> MergeResult:
 
     # --- Local removals → remove from remote ---
     to_remove_remote = [
-        baseline_by_id[sid]
-        for sid in local_removed_ids - remote_removed_ids
-        if sid in baseline_by_id
+        baseline_by_id[sid] for sid in local_removed_ids - remote_removed_ids if sid in baseline_by_id
     ]
     if to_remove_remote:
         try:
@@ -152,7 +146,7 @@ def sync(provider: ServiceProvider, playlist: Playlist) -> MergeResult:
             new_baseline = provider.fetch_songs(playlist.service_id)
         else:
             new_baseline = remote_songs
-        playlist.last_synced = datetime.now(tz=timezone.utc)
+        playlist.last_synced = datetime.now(tz=UTC)
         save_snapshot(playlist.service, playlist.service_id, new_baseline)
         playlist.songs = new_baseline
     save_playlist_state(playlist)

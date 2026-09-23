@@ -6,17 +6,16 @@ This is a second, provider-agnostic layer that also covers Deezer — whose
 client (deezer-python) has no retry logic of its own — and any residual
 failures after Spotify's own retries are exhausted.
 """
+
 from __future__ import annotations
 
 import random
 import time
-from typing import Callable, TypeVar
+from collections.abc import Callable
 
 import deezer.exceptions
 import httpx
 import spotipy
-
-T = TypeVar("T")
 
 _TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
 _TRANSIENT_NETWORK_ERRORS = (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError)
@@ -48,7 +47,7 @@ def _retry_delay(exc: Exception, attempt: int, base_delay: float) -> float | Non
     return delay + random.uniform(0, delay * 0.1)
 
 
-def with_retry(fn: Callable[[], T], *, max_attempts: int = 3, base_delay: float = 1.0) -> T:
+def with_retry[T](fn: Callable[[], T], *, max_attempts: int = 3, base_delay: float = 1.0) -> T:
     """Call fn(), retrying on transient provider errors with exponential backoff + jitter."""
     attempt = 0
     while True:

@@ -15,7 +15,7 @@ def make_song(name="Track", id="id1") -> Song:
 
 def make_playlist(service="spotify", service_id="pl1", name="Test", songs=None) -> Playlist:
     p = Playlist(service=service, service_id=service_id, name=name, owner="user")
-    for s in (songs or []):
+    for s in songs or []:
         p.add_song(s)
     return p
 
@@ -29,6 +29,7 @@ def tmp_workdir(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # _extract_id / _resolve_user_id / _find_tracked_playlist
 # ---------------------------------------------------------------------------
+
 
 class TestExtractId:
     def test_bare_id_unchanged(self):
@@ -66,6 +67,7 @@ class TestFindTrackedPlaylist:
     def test_found_by_id(self):
         p = make_playlist(service_id="pl1")
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(p)
         found = cli._find_tracked_playlist("pl1", None)
         assert found.service_id == "pl1"
@@ -76,6 +78,7 @@ class TestFindTrackedPlaylist:
 
     def test_raises_when_ambiguous_across_services(self):
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(make_playlist(service="spotify", service_id="dup"))
         sh.save_playlist_state(make_playlist(service="deezer", service_id="dup"))
         with pytest.raises(SystemExit, match="Ambiguous"):
@@ -83,6 +86,7 @@ class TestFindTrackedPlaylist:
 
     def test_service_disambiguates(self):
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(make_playlist(service="spotify", service_id="dup", name="S"))
         sh.save_playlist_state(make_playlist(service="deezer", service_id="dup", name="D"))
         found = cli._find_tracked_playlist("dup", "deezer")
@@ -92,6 +96,7 @@ class TestFindTrackedPlaylist:
 # ---------------------------------------------------------------------------
 # build_parser()
 # ---------------------------------------------------------------------------
+
 
 class TestBuildParser:
     def test_no_command_has_none_command(self):
@@ -136,6 +141,7 @@ class TestBuildParser:
 # cmd_clone
 # ---------------------------------------------------------------------------
 
+
 class TestCmdClone:
     def test_calls_clone_with_resolved_args(self, monkeypatch, capsys):
         provider = MagicMock(spec=ServiceProvider, service_name="spotify")
@@ -157,6 +163,7 @@ class TestCmdClone:
 # cmd_sync
 # ---------------------------------------------------------------------------
 
+
 class TestCmdSync:
     def test_requires_playlist_id_or_all(self):
         args = cli.build_parser().parse_args(["sync"])
@@ -166,6 +173,7 @@ class TestCmdSync:
     def test_syncs_single_playlist(self, monkeypatch, capsys):
         p = make_playlist(service_id="pl1")
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(p)
 
         provider = MagicMock(spec=ServiceProvider)
@@ -180,6 +188,7 @@ class TestCmdSync:
 
     def test_all_syncs_every_tracked_playlist(self, monkeypatch):
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(make_playlist(service_id="a"))
         sh.save_playlist_state(make_playlist(service_id="b"))
 
@@ -201,6 +210,7 @@ class TestCmdSync:
 
     def test_result_errors_set_nonzero_exit_code(self, monkeypatch, capsys):
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(make_playlist(service_id="pl1"))
 
         bad_result = MergeResult(errors=["push failed: boom"])
@@ -215,6 +225,7 @@ class TestCmdSync:
 
     def test_sync_exception_sets_nonzero_exit_code_and_continues(self, monkeypatch, capsys):
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(make_playlist(service_id="a"))
         sh.save_playlist_state(make_playlist(service_id="b"))
 
@@ -237,10 +248,12 @@ class TestCmdSync:
 # cmd_cherry_pick
 # ---------------------------------------------------------------------------
 
+
 class TestCmdCherryPick:
     def test_cherry_picks_new_songs_into_target(self, monkeypatch, capsys):
         target = make_playlist(service_id="target1", name="Target")
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(target)
 
         songs = [make_song("A", "a"), make_song("B", "b")]
@@ -261,10 +274,12 @@ class TestCmdCherryPick:
 # cmd_export
 # ---------------------------------------------------------------------------
 
+
 class TestCmdExport:
     def test_exports_auto_resolved_songs(self, monkeypatch, capsys):
         source = make_playlist(service_id="src1", name="Source", songs=[make_song("A", "a")])
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(source)
 
         target_provider = MagicMock(spec=ServiceProvider, service_name="deezer")
@@ -272,7 +287,8 @@ class TestCmdExport:
         monkeypatch.setattr(cli, "SPOTIFY_USER_ID", "me")
         auto_resolved_song = make_song("A", "d1")
         monkeypatch.setattr(
-            cli, "plan_export",
+            cli,
+            "plan_export",
             lambda songs, provider: ExportPlan(auto_resolved=[(songs[0], auto_resolved_song)]),
         )
         execute_mock = MagicMock(return_value="new_export_id")
@@ -290,12 +306,14 @@ class TestCmdExport:
     def test_reports_skipped_conflicts(self, monkeypatch, capsys):
         source = make_playlist(service_id="src1", songs=[make_song("A", "a"), make_song("B", "b")])
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(source)
 
         target_provider = MagicMock(spec=ServiceProvider, service_name="deezer")
         monkeypatch.setattr(cli, "_build_provider", lambda service: target_provider)
         monkeypatch.setattr(cli, "SPOTIFY_USER_ID", "me")
         from SyncZik.cross_platform import MatchKind, SongConflict
+
         plan = ExportPlan(
             auto_resolved=[(source.songs[0], make_song("A", "d1"))],
             conflicts=[SongConflict(source=source.songs[1], kind=MatchKind.NOT_FOUND)],
@@ -313,6 +331,7 @@ class TestCmdExport:
 # run_cli — top-level dispatch
 # ---------------------------------------------------------------------------
 
+
 class TestRunCli:
     def test_no_args_returns_none(self, monkeypatch):
         monkeypatch.setattr(cli, "setup_logging", MagicMock())
@@ -323,6 +342,7 @@ class TestRunCli:
         monkeypatch.setattr(cli, "_build_provider", lambda service: MagicMock(spec=ServiceProvider))
         monkeypatch.setattr(cli, "sync_playlist", lambda provider, playlist: MergeResult())
         import SyncZik.snapshot_handler as sh
+
         sh.save_playlist_state(make_playlist(service_id="pl1"))
 
         assert cli.run_cli(["sync", "pl1"]) == 0

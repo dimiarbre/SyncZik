@@ -14,7 +14,10 @@ from SyncZik.providers.spotify import _parse_song as _parse_spotify_song
 from SyncZik.syncer import Song
 
 
-def _deezer_http_error(status_code: int, text: str = '{"error": "boom"}') -> deezer.exceptions.DeezerHTTPError:
+def _deezer_http_error(
+    status_code: int,
+    text: str = '{"error": "boom"}',
+) -> deezer.exceptions.DeezerHTTPError:
     request = httpx.Request("GET", "https://api.deezer.com/x")
     response = httpx.Response(status_code, request=request, text=text)
     http_exc = httpx.HTTPStatusError("error", request=request, response=response)
@@ -30,8 +33,9 @@ def make_artist(id=1, name="Artist") -> deezer.Artist:
     return deezer.Artist(client=MagicMock(), json={"id": id, "name": name})
 
 
-def make_track(id=1, title="Track", artist=None, contributors=None, link=None,
-                isrc=None, duration=None, album=None) -> deezer.Track:
+def make_track(
+    id=1, title="Track", artist=None, contributors=None, link=None, isrc=None, duration=None, album=None
+) -> deezer.Track:
     artist = artist or make_artist(id=1, name="Main Artist")
     contributors = contributors if contributors is not None else []
     json = {
@@ -65,6 +69,7 @@ def make_deezer_playlist(id=1, title="Playlist", owner="Owner", tracks=None) -> 
 # ---------------------------------------------------------------------------
 # _parse_artists / _parse_song
 # ---------------------------------------------------------------------------
+
 
 def test_parse_artists():
     artists = [make_artist(1, "A"), make_artist(2, "B")]
@@ -111,6 +116,7 @@ def test_parse_song_metadata_defaults_to_none_when_absent():
 # ---------------------------------------------------------------------------
 # DeezerProvider
 # ---------------------------------------------------------------------------
+
 
 def test_get_playlist_builds_playlist_with_songs():
     client = MagicMock(spec=deezer.Client)
@@ -237,6 +243,7 @@ def test_remove_songs_batches_over_size_limit():
 # DeezerProvider — error translation & retry
 # ---------------------------------------------------------------------------
 
+
 class TestDeezerProviderErrorHandling:
     def test_get_playlist_translates_404_to_not_found(self):
         client = MagicMock(spec=deezer.Client)
@@ -269,6 +276,7 @@ class TestDeezerProviderErrorHandling:
 # get_deezer_client
 # ---------------------------------------------------------------------------
 
+
 def test_get_deezer_client_raises_without_token(monkeypatch):
     monkeypatch.setattr(auth, "DEEZER_ACCESS_TOKEN", None)
     monkeypatch.setattr(auth, "_deezer_client", None)
@@ -292,8 +300,10 @@ def test_get_deezer_client_caches_instance(monkeypatch):
 # so fixtures here are just nested dict/list literals shaped like its JSON.
 # ---------------------------------------------------------------------------
 
-def make_spotify_track_item(id="1", name="Track", artists=None, uri=None,
-                             album=None, duration_ms=None, isrc=None, added_at=None) -> dict:
+
+def make_spotify_track_item(
+    id="1", name="Track", artists=None, uri=None, album=None, duration_ms=None, isrc=None, added_at=None
+) -> dict:
     artists = artists if artists is not None else [{"id": "a1", "name": "Artist"}]
     track = {
         "id": id,
@@ -320,7 +330,12 @@ def make_song(id="s1") -> Song:
 class TestSpotifyParseSong:
     def test_parses_basic_and_metadata_fields(self):
         item = make_spotify_track_item(
-            id="1", name="Song", album="Album", duration_ms=200_000, isrc="US123", added_at="2024-01-01",
+            id="1",
+            name="Song",
+            album="Album",
+            duration_ms=200_000,
+            isrc="US123",
+            added_at="2024-01-01",
         )
         song = _parse_spotify_song(item)
         assert song.name == "Song"
@@ -346,7 +361,10 @@ class TestSpotifyProvider:
             "name": "My Playlist",
             "owner": {"display_name": "Alice"},
             "tracks": {
-                "items": [make_spotify_track_item(id="1", name="A"), make_spotify_track_item(id="2", name="B")],
+                "items": [
+                    make_spotify_track_item(id="1", name="A"),
+                    make_spotify_track_item(id="2", name="B"),
+                ],
                 "next": None,
             },
         }
@@ -375,7 +393,8 @@ class TestSpotifyProvider:
     def test_get_playlist_skips_null_tracks(self):
         sp = MagicMock(spec=spotipy.Spotify)
         sp.playlist.return_value = {
-            "name": "P", "owner": {"display_name": "U"},
+            "name": "P",
+            "owner": {"display_name": "U"},
             "tracks": {"items": [{"track": None}, make_spotify_track_item(id="1", name="A")], "next": None},
         }
         provider = SpotifyProvider(sp)
@@ -404,9 +423,13 @@ class TestSpotifyProvider:
 
     def test_search_tracks_passes_query_and_limit(self):
         sp = MagicMock(spec=spotipy.Spotify)
-        sp.search.return_value = {"tracks": {"items": [
-            {"id": "1", "name": "T1", "uri": "u1", "artists": [{"id": "a", "name": "A"}]},
-        ]}}
+        sp.search.return_value = {
+            "tracks": {
+                "items": [
+                    {"id": "1", "name": "T1", "uri": "u1", "artists": [{"id": "a", "name": "A"}]},
+                ]
+            }
+        }
         provider = SpotifyProvider(sp)
         songs = provider.search_tracks("query", limit=1)
         sp.search.assert_called_once_with(q="query", type="track", limit=1)
@@ -417,7 +440,9 @@ class TestSpotifyProvider:
         sp.user_playlist_create.return_value = {"id": "new123"}
         provider = SpotifyProvider(sp)
         playlist_id = provider.create_playlist("user", "New", description="desc")
-        sp.user_playlist_create.assert_called_once_with(user="user", name="New", public=True, description="desc")
+        sp.user_playlist_create.assert_called_once_with(
+            user="user", name="New", public=True, description="desc"
+        )
         assert playlist_id == "new123"
 
     def test_add_songs_batches_over_size_limit(self):

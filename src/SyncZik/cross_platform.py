@@ -1,4 +1,5 @@
 """Cross-platform playlist export with conflict detection and resolution."""
+
 from __future__ import annotations
 
 import re
@@ -10,7 +11,7 @@ from .syncer import Song
 
 
 class MatchKind(Enum):
-    EXACT = "exact"          # title + first artist match after normalization
+    EXACT = "exact"  # title + first artist match after normalization
     AMBIGUOUS = "ambiguous"  # candidates found but no definitive match
     NOT_FOUND = "not_found"  # target platform returned nothing
 
@@ -37,9 +38,9 @@ class ExportPlan:
 def _normalize(text: str) -> str:
     """Lowercase, strip punctuation noise, remove featuring suffixes."""
     text = text.lower().strip()
-    text = re.sub(r'\s*[\(\[](feat|ft|with|prod)\.?[^\)\]]*[\)\]]', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\s+(feat|ft)\.?\s+.*$', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'[^\w\s]', '', text)
+    text = re.sub(r"\s*[\(\[](feat|ft|with|prod)\.?[^\)\]]*[\)\]]", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+(feat|ft)\.?\s+.*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[^\w\s]", "", text)
     return text.strip()
 
 
@@ -47,10 +48,9 @@ def _is_exact_match(source: Song, candidate: Song) -> bool:
     """True when title and first artist both match after normalization."""
     if not source.artists or not candidate.artists:
         return False
-    return (
-        _normalize(source.name) == _normalize(candidate.name)
-        and _normalize(source.artists[0].name) == _normalize(candidate.artists[0].name)
-    )
+    return _normalize(source.name) == _normalize(candidate.name) and _normalize(
+        source.artists[0].name
+    ) == _normalize(candidate.artists[0].name)
 
 
 def _isrc_match(source: Song, candidate: Song) -> bool:

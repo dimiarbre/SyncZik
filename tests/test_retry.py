@@ -8,7 +8,10 @@ import spotipy
 from SyncZik.retry import with_retry
 
 
-def _deezer_http_error(status_code: int, text: str = '{"error": "boom"}') -> deezer.exceptions.DeezerHTTPError:
+def _deezer_http_error(
+    status_code: int,
+    text: str = '{"error": "boom"}',
+) -> deezer.exceptions.DeezerHTTPError:
     request = httpx.Request("GET", "https://api.deezer.com/x")
     response = httpx.Response(status_code, request=request, text=text)
     http_exc = httpx.HTTPStatusError("error", request=request, response=response)
@@ -27,10 +30,12 @@ class TestWithRetry:
         assert fn.call_count == 1
 
     def test_retries_spotify_429_then_succeeds(self):
-        fn = MagicMock(side_effect=[
-            spotipy.SpotifyException(429, -1, "rate limited", headers={"Retry-After": "0"}),
-            "ok",
-        ])
+        fn = MagicMock(
+            side_effect=[
+                spotipy.SpotifyException(429, -1, "rate limited", headers={"Retry-After": "0"}),
+                "ok",
+            ]
+        )
         assert with_retry(fn, max_attempts=3) == "ok"
         assert fn.call_count == 2
 
@@ -51,10 +56,12 @@ class TestWithRetry:
         sleep_calls = []
         monkeypatch.setattr("SyncZik.retry.time.sleep", lambda seconds: sleep_calls.append(seconds))
 
-        fn = MagicMock(side_effect=[
-            spotipy.SpotifyException(429, -1, "rate limited", headers={"Retry-After": "5"}),
-            "ok",
-        ])
+        fn = MagicMock(
+            side_effect=[
+                spotipy.SpotifyException(429, -1, "rate limited", headers={"Retry-After": "5"}),
+                "ok",
+            ]
+        )
         with_retry(fn)
         assert sleep_calls == [5.0]
 

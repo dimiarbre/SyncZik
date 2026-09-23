@@ -1,19 +1,21 @@
 import json
+from datetime import UTC
 from pathlib import Path
 
 import pytest
-from SyncZik.syncer import Artist, Song, Playlist
+
 import SyncZik.snapshot_handler as sh
 from SyncZik.snapshot_handler import (
     delete_playlist,
-    list_snapshot_versions,
-    migrate_legacy_storage,
-    save_snapshot,
-    load_snapshot,
-    save_playlist_state,
-    load_playlist_state,
     list_playlists,
+    list_snapshot_versions,
+    load_playlist_state,
+    load_snapshot,
+    migrate_legacy_storage,
+    save_playlist_state,
+    save_snapshot,
 )
+from SyncZik.syncer import Artist, Playlist, Song
 
 
 def make_song(name="Track", id="s1", uri=None) -> Song:
@@ -22,7 +24,7 @@ def make_song(name="Track", id="s1", uri=None) -> Song:
 
 def make_playlist(service="spotify", service_id="pl1", songs=None) -> Playlist:
     p = Playlist(service=service, service_id=service_id, name="Test", owner="user")
-    for s in (songs or []):
+    for s in songs or []:
         p.add_song(s)
     return p
 
@@ -36,6 +38,7 @@ def tmp_workdir(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # save_snapshot / load_snapshot
 # ---------------------------------------------------------------------------
+
 
 class TestSnapshotRoundTrip:
     def test_save_and_load(self):
@@ -100,6 +103,7 @@ class TestSnapshotRoundTrip:
 # Snapshot versioning (history) and legacy flat-file fallback
 # ---------------------------------------------------------------------------
 
+
 class TestSnapshotVersioning:
     def test_load_snapshot_returns_latest_version(self):
         save_snapshot("spotify", "pl1", [make_song("Old", "old")])
@@ -144,6 +148,7 @@ class TestSnapshotVersioning:
 # ---------------------------------------------------------------------------
 # _data_dir() / migrate_legacy_storage() — CWD-relative -> XDG data dir
 # ---------------------------------------------------------------------------
+
 
 class TestDataDir:
     def test_respects_synczik_data_dir_env_var(self, tmp_path):
@@ -205,9 +210,9 @@ class TestMigrateLegacyStorage:
         # normal API should see it at the new location.
         legacy_state_dir = Path("state/spotify")
         legacy_state_dir.mkdir(parents=True)
-        legacy_state_dir.joinpath("pl1.json").write_text(json.dumps(
-            make_playlist(songs=[make_song()]).to_dict()
-        ))
+        legacy_state_dir.joinpath("pl1.json").write_text(
+            json.dumps(make_playlist(songs=[make_song()]).to_dict())
+        )
 
         migrate_legacy_storage()
 
@@ -219,6 +224,7 @@ class TestMigrateLegacyStorage:
 # ---------------------------------------------------------------------------
 # delete_playlist — untrack locally, remote untouched
 # ---------------------------------------------------------------------------
+
 
 class TestDeletePlaylist:
     def test_removes_state_file(self):
@@ -245,6 +251,7 @@ class TestDeletePlaylist:
 # ---------------------------------------------------------------------------
 # Atomic writes
 # ---------------------------------------------------------------------------
+
 
 class TestAtomicWrite:
     def test_preserves_old_file_on_write_failure(self, monkeypatch):
@@ -292,6 +299,7 @@ class TestAtomicWrite:
 # save_playlist_state / load_playlist_state
 # ---------------------------------------------------------------------------
 
+
 class TestPlaylistStateRoundTrip:
     def test_save_and_load(self):
         p = make_playlist(songs=[make_song("A", "a"), make_song("B", "b")])
@@ -306,8 +314,12 @@ class TestPlaylistStateRoundTrip:
 
     def test_parent_id_preserved(self):
         p = Playlist(
-            service="spotify", service_id="pl1", name="Clone", owner="u",
-            parent_id="orig123", parent_service="spotify",
+            service="spotify",
+            service_id="pl1",
+            name="Clone",
+            owner="u",
+            parent_id="orig123",
+            parent_service="spotify",
         )
         save_playlist_state(p)
         loaded = load_playlist_state("spotify", "pl1")
@@ -321,8 +333,9 @@ class TestPlaylistStateRoundTrip:
         assert loaded.parent_id is None
 
     def test_last_synced_preserved(self):
-        from datetime import datetime, timezone
-        ts = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        from datetime import datetime
+
+        ts = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         p = Playlist(service="spotify", service_id="pl1", name="P", owner="u", last_synced=ts)
         save_playlist_state(p)
         loaded = load_playlist_state("spotify", "pl1")
@@ -355,6 +368,7 @@ class TestPlaylistStateRoundTrip:
 # ---------------------------------------------------------------------------
 # list_playlists
 # ---------------------------------------------------------------------------
+
 
 class TestListPlaylists:
     def test_empty_when_no_state_dir(self):

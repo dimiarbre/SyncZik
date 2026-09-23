@@ -9,6 +9,7 @@ The log directory is a hand-rolled XDG-ish path for now (no new dependency
 for one file); Phase 5's planned move to `platformdirs` for state/snapshots
 will fold this in for proper cross-platform paths.
 """
+
 from __future__ import annotations
 
 import logging

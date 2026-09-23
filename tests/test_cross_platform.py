@@ -1,20 +1,21 @@
 from unittest.mock import MagicMock
 
 import pytest
-from SyncZik.syncer import Artist, Song
-from SyncZik.providers.base import ServiceProvider
+
 from SyncZik.cross_platform import (
     ExportPlan,
     MatchKind,
     SongConflict,
     _best_exact_match,
     _duration_diff_ms,
+    _is_exact_match,
     _isrc_match,
     _normalize,
-    _is_exact_match,
     execute_export,
     plan_export,
 )
+from SyncZik.providers.base import ServiceProvider
+from SyncZik.syncer import Artist, Song
 
 
 def make_song(name="Track", artist="Artist", id="s1", uri=None, isrc=None, duration_ms=None) -> Song:
@@ -45,6 +46,7 @@ def tmp_workdir(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # _normalize()
 # ---------------------------------------------------------------------------
+
 
 class TestNormalize:
     def test_lowercases(self):
@@ -77,6 +79,7 @@ class TestNormalize:
 # ---------------------------------------------------------------------------
 # _is_exact_match()
 # ---------------------------------------------------------------------------
+
 
 class TestIsExactMatch:
     def test_exact_title_and_artist(self):
@@ -113,6 +116,7 @@ class TestIsExactMatch:
 # ---------------------------------------------------------------------------
 # _isrc_match() / _duration_diff_ms() / _best_exact_match()
 # ---------------------------------------------------------------------------
+
 
 class TestIsrcMatch:
     def test_matches_on_shared_isrc(self):
@@ -170,6 +174,7 @@ class TestBestExactMatch:
 # ---------------------------------------------------------------------------
 # plan_export()
 # ---------------------------------------------------------------------------
+
 
 class TestPlanExport:
     def test_exact_match_auto_resolved(self):
@@ -279,6 +284,7 @@ class TestPlanExport:
 # execute_export()
 # ---------------------------------------------------------------------------
 
+
 class TestExecuteExport:
     def test_creates_playlist_and_adds_songs(self):
         songs = [make_song("A", "Art", "d1"), make_song("B", "Art2", "d2")]
@@ -311,6 +317,7 @@ class TestExecuteExport:
 # ExportPlan helpers
 # ---------------------------------------------------------------------------
 
+
 class TestExportPlan:
     def test_is_clean_no_conflicts(self):
         plan = ExportPlan(auto_resolved=[(make_song(), make_song(id="d1"))], conflicts=[])
@@ -322,8 +329,10 @@ class TestExportPlan:
 
     def test_total_is_sum(self):
         plan = ExportPlan(
-            auto_resolved=[(make_song("A", id="a"), make_song("A", id="a2")),
-                           (make_song("B", id="b"), make_song("B", id="b2"))],
+            auto_resolved=[
+                (make_song("A", id="a"), make_song("A", id="a2")),
+                (make_song("B", id="b"), make_song("B", id="b2")),
+            ],
             conflicts=[SongConflict(make_song("C", id="c"), MatchKind.NOT_FOUND)],
         )
         assert plan.total() == 3
