@@ -18,6 +18,7 @@ setup(
     install_requires=[
         "spotipy",
         "deezer-python",
+        "httpx",
         "python-dotenv",
         "setuptools",
         "textual",

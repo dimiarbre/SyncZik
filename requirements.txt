@@ -1,5 +1,6 @@
 setuptools
 spotipy
 deezer-python
+httpx
 python-dotenv
 textual
