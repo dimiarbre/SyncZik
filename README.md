@@ -1,6 +1,12 @@
 # SyncZik
 
+[![CI](https://github.com/dimiarbre/SyncZik/actions/workflows/ci.yml/badge.svg)](https://github.com/dimiarbre/SyncZik/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+
 **Git for playlists** — fork, sync, cherry-pick, and export playlists across streaming platforms.
+
+![SyncZik TUI screenshot](docs/screenshot.svg)
 
 ## What it does
 
@@ -192,27 +198,70 @@ Source playlist songs
 
 ## Local data
 
-| Path | Contents |
+All of it lives under an OS-appropriate data directory — on Linux
+typically `~/.local/share/SyncZik`, on macOS `~/Library/Application
+Support/SyncZik`, on Windows `%LOCALAPPDATA%\SyncZik` (via
+[platformdirs](https://pypi.org/project/platformdirs/)) — override it
+with the `SYNCZIK_DATA_DIR` environment variable.
+
+| Path (relative to the data dir) | Contents |
 |------|----------|
 | `state/{service}/{id}.json` | Local playlist state (working tree) |
 | `snapshots/{service}/{id}/{timestamp}.json` | Versioned baseline snapshots — one per Clone/Sync, oldest to newest |
-| `.spotify_cache` | Cached OAuth token |
+| `.spotify_cache` (repo-relative, not yet migrated) | Cached OAuth token |
 | `$XDG_STATE_HOME/synczik/log/synczik.log` (defaults to `~/.local/state/synczik/log/`) | Rotating debug log — errors/warnings from both the TUI and CLI, not just the ephemeral toast/stderr line. `--verbose` (CLI) logs at debug level. |
 
-Every Clone/Sync records a new snapshot version instead of overwriting the last one, so the `H` (History) screen can show a `git log`-style view of what changed at each point and revert local state to any of them (local-only — the remote is untouched until you Sync again). Installs from before this existed keep working: a legacy flat `snapshots/{service}/{id}.json` file is still read as a fallback until the next save.
+If you used SyncZik before this existed, your old CWD-relative `state/`
+and `snapshots/` directories are copied (never deleted or overwritten)
+into the new location automatically the first time you run it — check
+stderr/the log for a one-line notice when that happens.
+
+Every Clone/Sync records a new snapshot version instead of overwriting the last one, so the `H` (History) screen can show a `git log`-style view of what changed at each point and revert local state to any of them (local-only — the remote is untouched until you Sync again). Installs from before snapshot versioning existed keep working: a legacy flat `snapshots/{service}/{id}.json` file is still read as a fallback until the next save.
 
 State and snapshot files are written atomically (temp file + rename), so a crash or interrupted process mid-save can't leave a corrupted file behind.
 
 Outbound Spotify/Deezer API calls are retried with exponential backoff on rate limits (429) and transient server/network errors; a failure that persists through retries is surfaced as a `SyncZikError` subclass (`ProviderAuthError`, `ProviderRateLimitError`, `ProviderNotFoundError`) with an actionable message instead of a raw library exception. A sync that fails partway through a push/removal reports it in the result rather than silently marking the playlist as up to date.
 
+## Troubleshooting / FAQ
+
+**Spotify login opens a browser but nothing happens / redirect fails.**
+Double-check `SPOTIFY_REDIRECT_URI` in `.env` matches *exactly* (including
+trailing slash) a Redirect URI registered on your app at
+[developer.spotify.com](https://developer.spotify.com).
+
+**"Missing required .env variable(s)" at startup.**
+Copy `.env.example` to `.env` and fill in the missing value(s) named in
+the error — SyncZik checks for these before attempting to talk to
+Spotify/Deezer, rather than failing deep inside the API client.
+
+**Deezer says my token isn't working anymore.**
+Deezer access tokens don't refresh automatically (unlike Spotify's OAuth
+flow). Repeat the authorize-redirect step in Setup step 3 and update
+`DEEZER_ACCESS_TOKEN` in `.env`.
+
+**My playlist tree is empty even though I know I've tracked playlists before.**
+If this is your first run after upgrading from a version predating the
+XDG data-dir change, the migration notice (stderr / the log file) tells
+you if it ran. If you're intentionally pointing `SYNCZIK_DATA_DIR`
+somewhere new, that's expected — nothing is tracked there yet.
+
+**Where's the log file?**
+Shown in the TUI's Help screen (`?`) and in the Local data table above.
+Attach the relevant excerpt when filing a bug report.
+
 ## Tests
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest                                            # tests
+pytest --cov=SyncZik --cov-report=term-missing    # ...with a coverage report
+ruff check . && ruff format --check .             # lint + format check
+mypy src/SyncZik                                  # type check
 ```
 
-277 tests covering models, sync merge logic (including partial-failure and order-preservation edge cases), versioned snapshot history and legacy-format fallback, retry/backoff behavior, provider implementations for both Spotify and Deezer (including error translation and required-credential validation), playlist git operations (including `log`/`revert`), cross-platform export logic (including ISRC and duration-tiebreak matching), the headless CLI, the debug log setup, and the TUI (provider selection, the async worker helper behind non-blocking network calls, undo, diff, per-song sync conflict resolution, cherry-pick's toggle fix, escape-to-cancel, history/revert, and rename/untrack), driven end-to-end with Textual's `Pilot`/`run_test()`. All tests are fully mocked — no real API calls required. CI runs `pytest` and `mypy` on every push/PR (see `.github/workflows/ci.yml`).
+`pre-commit install` runs `ruff` (check + format) automatically on each commit; `pyproject.toml` has the full config.
+
+285 tests (~75% line coverage) covering models, sync merge logic (including partial-failure and order-preservation edge cases), versioned snapshot history, XDG data-dir migration and legacy-format fallback, retry/backoff behavior, provider implementations for both Spotify and Deezer (including error translation and required-credential validation), playlist git operations (including `log`/`revert`), cross-platform export logic (including ISRC and duration-tiebreak matching), the headless CLI, the debug log setup, and the TUI (provider selection, the async worker helper behind non-blocking network calls, undo, diff, per-song sync conflict resolution, cherry-pick's toggle fix, escape-to-cancel, history/revert, and rename/untrack), driven end-to-end with Textual's `Pilot`/`run_test()`. All tests are fully mocked — no real API calls required. CI runs `ruff`, `mypy`, and `pytest` (with coverage) on every push/PR across Python 3.12 and 3.13 (see `.github/workflows/ci.yml`).
 
 ---
 
@@ -239,7 +288,8 @@ pytest
 - [x] **TUI responsiveness** — Load/Clone/Sync/Search/Export/Cherry-pick run off the UI thread with a loading indicator instead of freezing the app; `playlist_git.diff()` is now wired into the TUI (`V`); SyncResultModal's pending-removal decision is per-song, not just "remove all"/"keep all"; one-level undo (`U`) for the last staged Add/Remove/Cherry-pick; a help screen (`?`); every dialog backs out with `Escape`; Cherry-pick's "Space to toggle" hint now actually works (`ListView` only bound Enter by default); first-run onboarding hint when no playlists are tracked yet
 - [x] **Playlist history** — every Clone/Sync now records a versioned snapshot; `playlist_git.log()`/`revert()` and a TUI History screen (`H`) show what changed at each point and can revert local state to any of them; local `Rename` (`R`) and `Untrack` (`X`, with confirmation) for tracked playlists
 - [x] **CLI interface** — `syncZik clone|sync|cherry-pick|export` subcommands reuse the same `sync_engine.py`/`playlist_git.py` as the TUI, for scripting/cron use without an interactive terminal; a rotating debug log file (`--verbose` for debug level) instead of only ephemeral TUI toasts; required-credential validation at the point of use with an actionable message instead of an opaque failure inside `spotipy`/`deezer`; `.env.example` at the repo root
-- [x] 277 passing tests (snapshot versioning/history, sync engine edge cases, retry/backoff, playlist git including log/revert, cross-platform, providers — Spotify and Deezer — CLI, logging setup, TUI, driven end-to-end with Textual's `Pilot`)
+- [x] **Project maturity** — `pyproject.toml` (PEP 621) replaces `setup.py`/`setup.cfg`/`mypy.ini`; `ruff` (lint + format) added and made blocking in CI alongside `mypy` (was advisory-only); CI runs a Python 3.12/3.13 matrix with coverage reporting; `state`/`snapshots` moved from CWD-relative paths to an XDG-compliant data directory (via `platformdirs`, with a safe copy-only migration for existing installs); `.pre-commit-config.yaml`, `CHANGELOG.md`, `SECURITY.md`, issue/PR templates, README badges + a real screenshot + troubleshooting/FAQ section
+- [x] 285 passing tests, ~75% line coverage (snapshot versioning/history + XDG migration, sync engine edge cases, retry/backoff, playlist git including log/revert, cross-platform, providers — Spotify and Deezer — CLI, logging setup, TUI, driven end-to-end with Textual's `Pilot`)
 
 ### Next steps
 
@@ -247,6 +297,7 @@ pytest
 - [ ] **Integration tests** — `tests/integration/` directory with `@pytest.mark.integration` tests that hit the real Spotify API using a fixed test playlist (skip unless credentials present)
 - [ ] **Duplicate-song support** — a playlist containing the same track twice can't be represented today (dedup by ID throughout `Playlist.add_song`/`sync_engine`/both providers); a real structural change, deliberately deferred rather than bundled into playlist history
 - [ ] **Full reorder-detection** — sync() now preserves order when *pulling* new songs, but a pure reorder on the remote (no add/remove) is still invisible to the diff
+- [ ] **`.spotify_cache` still CWD-relative** — the OAuth token cache wasn't moved in the state/snapshots XDG migration; a smaller follow-up
 - [ ] **Apple Music provider** — using the MusicKit JS API or a music-manager bridge
 - [ ] **YouTube Music provider**
 - [ ] **Cloud backup** — optional encrypted remote storage of `state/` + `snapshots/` for multi-device use
